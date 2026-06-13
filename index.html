@@ -250,11 +250,15 @@ async function callClaude(system,userContent,wantJson){
   return JSON.parse(clean);
 }
 
-async function transcribeImage(base64,mediaType,kind){
+async function transcribeFile(base64,mediaType,kind){
   const hint=kind==="answer"?"이건 학습자가 손으로 쓴 답안이야.":"이건 학습자의 공부 노트야.";
-  return await callClaude("너는 손글씨 OCR 도우미야.",
-    [{type:"image",source:{type:"base64",media_type:mediaType||"image/png",data:base64}},
-     {type:"text",text:hint+" 적힌 내용을 한국어로 정확히 옮겨줘. 수식은 ^ _ 기호로 풀어 써. 텍스트만 출력."}],false);
+  const isPdf=mediaType==="application/pdf";
+  const fileBlock=isPdf
+    ?{type:"document",source:{type:"base64",media_type:"application/pdf",data:base64}}
+    :{type:"image",source:{type:"base64",media_type:mediaType||"image/png",data:base64}};
+  return await callClaude(
+    isPdf?"너는 PDF 문서 내용 추출 도우미야.":"너는 손글씨 OCR 도우미야.",
+    [fileBlock,{type:"text",text:hint+" 내용을 한국어로 정확히 옮겨줘. 수식은 ^ _ 기호로 풀어 써. 텍스트만 출력."}],false);
 }
 
 /* 파일 → base64 */
@@ -373,6 +377,8 @@ function App(){
 function SubjectTabs({subjects,active,onChange,onSave}){
   const [adding,setAdding]=useState(false);
   const [newName,setNewName]=useState("");
+  const [editId,setEditId]=useState(null);
+  const [editName,setEditName]=useState("");
 
   function addSubject(){
     const name=newName.trim();if(!name)return;
@@ -380,17 +386,45 @@ function SubjectTabs({subjects,active,onChange,onSave}){
     const s=[...subjects,{id:uid(),name,color}];
     onSave(s);setNewName("");setAdding(false);
   }
+  function startEdit(s,e){
+    e.stopPropagation();setEditId(s.id);setEditName(s.name);
+  }
+  function saveEdit(){
+    const n=editName.trim();if(!n)return;
+    onSave(subjects.map(s=>s.id===editId?{...s,name:n}:s));setEditId(null);
+  }
+  function delSubject(s,e){
+    e.stopPropagation();
+    if(!confirm('"'+s.name+'" 과목 삭제할까? 덱 자료는 남아있어.'))return;
+    onSave(subjects.filter(x=>x.id!==s.id));
+    if(active===s.id)onChange("all");
+  }
+  const btnStyle={background:"none",border:"none",cursor:"pointer",padding:"0 2px",opacity:.55,color:"inherit",fontSize:12,lineHeight:1};
 
   return(
     <div style={{marginBottom:20}}>
       <div className="sub-tabs">
         <button className={"sub-tab"+(active==="all"?" on":"")} onClick={()=>onChange("all")}>전체</button>
-        {subjects.map(s=>(
-          <button key={s.id} className={"sub-tab"+(active===s.id?" on":"")} onClick={()=>onChange(s.id)}>
-            <span className="sub-dot" style={{background:s.color}}/>
-            {s.name}
-          </button>
-        ))}
+        {subjects.map(s=>
+          editId===s.id?(
+            <div key={s.id} className="subj-new" style={{display:"inline-flex",margin:0}}>
+              <input value={editName} onChange={e=>setEditName(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter")saveEdit();if(e.key==="Escape")setEditId(null);}}
+                autoFocus style={{width:100}}/>
+              <button className="btn pri xs" onClick={saveEdit}>저장</button>
+              <button className="btn gho xs" onClick={()=>setEditId(null)}>취소</button>
+            </div>
+          ):(
+            <div key={s.id} className={"sub-tab"+(active===s.id?" on":"")}
+              style={{display:"inline-flex",alignItems:"center",gap:3,paddingRight:6,cursor:"pointer"}}
+              onClick={()=>onChange(s.id)}>
+              <span className="sub-dot" style={{background:s.color}}/>
+              <span>{s.name}</span>
+              <button style={btnStyle} onClick={e=>startEdit(s,e)} title="수정">✎</button>
+              <button style={{...btnStyle,fontSize:14}} onClick={e=>delSubject(s,e)} title="삭제">×</button>
+            </div>
+          )
+        )}
         <button className="btn gho xs" onClick={()=>setAdding(v=>!v)}>+ 과목</button>
       </div>
       {adding&&(
@@ -640,7 +674,7 @@ function PenPad({kind,onText}){
     setBusy(true);setErr("");
     try{
       const data=ref.current.toDataURL("image/png").split(",")[1];
-      const t=await transcribeImage(data,"image/png",kind);
+      const t=await transcribeFile(data,"image/png",kind);
       onText((t||"").trim());clear();
     }catch(e){setErr("인식 실패: "+e.message);}
     setBusy(false);
@@ -695,7 +729,7 @@ function PhotoButton({kind,onText,label}){
   async function handle(e){
     const f=e.target.files&&e.target.files[0];e.target.value="";if(!f)return;
     setBusy(true);
-    try{const data=await toB64(f);const t=await transcribeImage(data,f.type||"image/jpeg",kind);onText((t||"").trim());}
+    try{const data=await toB64(f);const t=await transcribeFile(data,f.type||"image/jpeg",kind);onText((t||"").trim());}
     catch(e){alert("인식 실패: "+e.message);}
     setBusy(false);
   }
@@ -730,7 +764,6 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
   }
 
   async function save(){
-    if(!name.trim()||(!material.trim()&&files.length===0)){setErr("제목이랑 내용(또는 파일)을 넣어줘.");return;}
     setBusy(true);setErr("");
 
     // 파일 → 텍스트 추출
@@ -739,23 +772,26 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
       try{
         const b64=await toB64(f);
         const mime=f.type||"image/jpeg";
-        const t=await transcribeImage(b64,mime,"note");
+        const t=await transcribeFile(b64,mime,"note");
         extra+=(t||"")+"\n";
       }catch(e){console.warn("파일 인식 실패",f.name,e.message);}
     }
     const fullMaterial=(material+"\n"+extra).trim();
+    const finalName=name.trim()||"새 자료";
 
     let concepts=[];
-    try{
-      const r=await callClaude(
-        "너는 학습 자료에서 핵심 개념을 뽑는 조교야. 능동 회상으로 시험 볼 만한 핵심 개념 8~15개를 짧은 명사구로 뽑아. 자료에 실제 있는 것만. JSON만: {\"concepts\":[\"...\"]}",
-        "자료:\n\n"+fullMaterial.slice(0,12000),true);
-      concepts=Array.isArray(r.concepts)?r.concepts:[];
-    }catch(e){setErr("개념 뽑기 실패: "+e.message);setBusy(false);return;}
-    if(!concepts.length)concepts=["전체 자료"];
+    if(fullMaterial){
+      try{
+        const r=await callClaude(
+          "너는 학습 자료에서 핵심 개념을 뽑는 조교야. 능동 회상으로 시험 볼 만한 핵심 개념 8~15개를 짧은 명사구로 뽑아. 자료에 실제 있는 것만. JSON만: {\"concepts\":[\"...\"]}",
+          "자료:\n\n"+fullMaterial.slice(0,12000),true);
+        concepts=Array.isArray(r.concepts)?r.concepts:[];
+      }catch(e){setErr("개념 뽑기 실패: "+e.message);setBusy(false);return;}
+      if(!concepts.length)concepts=["전체 자료"];
+    }
 
     const id=uid();
-    const deck={id,name:name.trim(),subjId,material:fullMaterial,createdAt:Date.now(),
+    const deck={id,name:finalName,subjId,material:fullMaterial,createdAt:Date.now(),
       concepts:concepts.map(nm=>({id:uid(),name:String(nm).slice(0,80),box:1,dueAt:0,reps:0,lapses:0}))};
     LS.set(dk(id),deck);
     LS.set(DECKS_KEY,[{id,name:deck.name,subjId},...(LS.get(DECKS_KEY)||[])]);

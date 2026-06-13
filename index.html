@@ -1007,25 +1007,40 @@ function Study({deck:initial,subjects}){
 
 /* ── 수식 렌더러 ── */
 function MathText({text,tag:Tag="p",className,style}){
-  const ref=useRef(null);
-  const safe=text
-    ?text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br/>")
-    :"";
-  useEffect(()=>{
-    if(!ref.current)return;
-    if(window.renderMathInElement){
-      try{renderMathInElement(ref.current,{
-        delimiters:[
-          {left:"$$",right:"$$",display:true},
-          {left:"$",right:"$",display:false},
-          {left:"\\(",right:"\\)",display:false},
-          {left:"\\[",right:"\\]",display:true},
-        ],
-        throwOnError:false,
-      });}catch(_){}
+  const segs=React.useMemo(()=>{
+    if(!text)return[];
+    const out=[];
+    const re=/(\$\$[\s\S]*?\$\$|\$[^\n$]*?\$)/g;
+    let last=0,m;
+    while((m=re.exec(text))!==null){
+      if(m.index>last)out.push({t:"str",v:text.slice(last,m.index)});
+      const d=m[0].startsWith("$$");
+      out.push({t:"math",v:m[0].slice(d?2:1,d?-2:-1),d});
+      last=m.index+m[0].length;
     }
+    if(last<text.length)out.push({t:"str",v:text.slice(last)});
+    return out;
   },[text]);
-  return <Tag ref={ref} className={className} style={style} dangerouslySetInnerHTML={{__html:safe}}/>;
+  return(
+    <Tag className={className} style={style}>
+      {segs.map((seg,i)=>{
+        if(seg.t==="str"){
+          const lines=seg.v.split("\n");
+          return lines.map((line,j)=>(
+            <React.Fragment key={"s"+i+"l"+j}>{line}{j<lines.length-1&&<br/>}</React.Fragment>
+          ));
+        }
+        if(!window.katex)return <span key={"m"+i}>{seg.v}</span>;
+        try{
+          return <span key={"m"+i}
+            style={seg.d?{display:"block",overflowX:"auto",margin:"6px 0"}:undefined}
+            dangerouslySetInnerHTML={{__html:
+              window.katex.renderToString(seg.v,{displayMode:seg.d,throwOnError:false})
+            }}/>;
+        }catch(_){return <span key={"m"+i}>{seg.v}</span>;}
+      })}
+    </Tag>
+  );
 }
 
 function Meter({box}){

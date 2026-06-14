@@ -1313,7 +1313,7 @@ function Study({deck:initial,subjects}){
     setPhase("dontknow");setDontknow("");setDontknowBusy(true);
     try{
       const r=await callAI(
-        "너는 친절한 튜터야. 출력 첫 글자부터 바로 설명 내용. 절대 금지: 인사·'알겠어'·'좋아'·'그럼'·'먼저'·'이 개념은'·'설명할게' 같은 도입 문장, 사고 과정 나열, 코드·XML·SVG 출력. 처음 배우는 학습자에게 비유·예시·왜 중요한지 포함해 반말로 5~8문장 순수 텍스트로. 수식만 LaTeX($...$, $$...$$).\n\n자료:\n"+studyMat,
+        "너는 친절한 튜터야. 학습자가 이 개념을 전혀 모르니 처음 배우는 사람에게 직관적으로(비유·예시·왜 중요한지) 반말로 설명해줘. 코드·XML·SVG 출력 금지. 수식은 LaTeX($...$, $$...$$).\n\n자료:\n"+studyMat,
         "개념: "+concept.name+(q?"\n원래 질문: "+q.question:""),
         false,{cache:true,maxTok:1400});
       setDontknow(r);

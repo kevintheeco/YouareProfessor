@@ -1313,7 +1313,7 @@ function Study({deck:initial,subjects}){
     setPhase("dontknow");setDontknow("");setDontknowBusy(true);
     try{
       const r=await callAI(
-        "너는 친절한 튜터야. 출력 첫 글자부터 바로 설명 내용. 절대 금지: 인사·'알겠어'·'좋아'·'그럼'·'먼저'·'이 개념은'·'설명할게'·'~에 대해 설명해줄게' 같은 도입 문장, 사고 과정 나열, 요약 예고, 주제 재언급. 처음 배우는 학습자에게 비유·예시·왜 중요한지 포함해 반말로 5~8문장. 수식은 LaTeX($...$, $$...$$). SVG 그래프 필요 시 코드블록 없이 <svg> 태그 직접(width≤380 height≤260, 축·레이블 포함).\n\n자료:\n"+studyMat,
+        "너는 친절한 튜터야. 출력 첫 글자부터 바로 설명 내용. 절대 금지: 인사·'알겠어'·'좋아'·'그럼'·'먼저'·'이 개념은'·'설명할게' 같은 도입 문장, 사고 과정 나열, 코드·XML·SVG 출력. 처음 배우는 학습자에게 비유·예시·왜 중요한지 포함해 반말로 5~8문장 순수 텍스트로. 수식만 LaTeX($...$, $$...$$).\n\n자료:\n"+studyMat,
         "개념: "+concept.name+(q?"\n원래 질문: "+q.question:""),
         false,{cache:true,maxTok:1400});
       setDontknow(r);
@@ -1639,7 +1639,9 @@ function sanitizeSvg(s){
 function MathText({text,tag:Tag="p",className,style}){
   if(!text)return <Tag className={className} style={style}/>;
   const nodes=[];
-  var svgParts=text.split(/(<svg[\s\S]*?<\/svg>)/i);
+  // 코드펜스 안에 SVG가 오는 경우도 추출해서 렌더
+  var cleaned=text.replace(/```[\w]*\s*(<svg[\s\S]*?<\/svg>)\s*```/gi,"$1");
+  var svgParts=cleaned.split(/(<svg[\s\S]*?<\/svg>)/i);
   svgParts.forEach(function(seg,si){
     if(si%2===1){
       nodes.push(React.createElement("div",{

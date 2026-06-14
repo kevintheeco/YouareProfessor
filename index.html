@@ -716,7 +716,7 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     e.preventDefault();drawing.current=true;
     try{e.target.setPointerCapture(e.pointerId);}catch(_){}
     const p=pt(e);
-    const isSpEraser=e.pointerType==="pen"&&!!(e.buttons&32);
+    const isSpEraser=e.pointerType==="pen"&&!!(e.buttons&34);
     if(isSpEraser||tool==="eraser"){eraseAt(p.x,p.y);return;}
     strokes.current.push({pts:[p],col:color,sz:size});
   }
@@ -725,7 +725,7 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     if(penOnly&&e.pointerType!=="pen"){drawing.current=false;return;}
     e.preventDefault();
     const p=pt(e);
-    const isSpEraser=e.pointerType==="pen"&&!!(e.buttons&32);
+    const isSpEraser=e.pointerType==="pen"&&!!(e.buttons&34);
     if(isSpEraser||tool==="eraser"){eraseAt(p.x,p.y);return;}
     const st=strokes.current[strokes.current.length-1];
     if(!st)return;

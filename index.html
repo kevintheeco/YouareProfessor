@@ -147,7 +147,7 @@ canvas.pad.eraser{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org
 .study-bar .snm{font-family:'Jua',sans-serif;font-size:15px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .study-bar .prog{display:flex;gap:10px;flex:none}
 .clist-panel{display:flex;flex-wrap:wrap;gap:4px;padding:10px 14px;border-radius:18px;animation:pop .25s ease}
-.ans-layout{display:grid;grid-template-columns:1fr 2fr;gap:14px;align-items:start}
+.ans-layout{display:grid;grid-template-columns:1fr 3fr;gap:14px;align-items:start}
 .ans-layout .pad{height:calc(100vh - 300px);min-height:420px}
 .crow{display:flex;align-items:center;gap:7px;padding:5px 9px;border-radius:10px;transition:background .15s;cursor:pointer;user-select:none}
 .crow.active{background:var(--pri-s)}
@@ -758,7 +758,8 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
   React.useImperativeHandle(fwdRef,()=>({
     getImageBase64:()=>canvasRef.current?canvasRef.current.toDataURL("image/png").split(",")[1]:null,
     hasStrokes:()=>strokes.current.length>0,
-    clear:()=>{strokes.current=[];redraw();setHasInk(false);setPadErr("");}
+    clear:()=>{strokes.current=[];redraw();setHasInk(false);setPadErr("");},
+    forceColor:(c)=>{setColor(c);setTool("pen");}
   }));
 
   const getDpr=()=>window.devicePixelRatio||1;
@@ -1114,6 +1115,7 @@ function Study({deck:initial,subjects}){
       const uc=schedule(concept,v);
       persist({...deck,concepts:deck.concepts.map(c=>c.id===concept.id?uc:c)});
       setConcept(uc);setCount(n=>n+1);setPhase("result");
+      setTimeout(()=>padRef.current?.forceColor(PEN_COLORS[2]),50);
     }catch(e){setPhase("answering");setSubmitErr("채점 실패: "+e.message);}
   }
 
@@ -1387,7 +1389,8 @@ function Study({deck:initial,subjects}){
                     <span className="muted" style={{fontSize:13}}>채점 중…</span>
                   </div>
                 )}
-                <PenPad ref={padRef} kind="answer" hideOcr penOnlyDefault={true} disabled={phase==="grading"||phase==="result"}/>
+                <PenPad ref={padRef} kind="answer" hideOcr penOnlyDefault={true} disabled={phase==="grading"}/>
+                {phase==="result"&&<p className="hint" style={{margin:"2px 0 0",fontSize:12}}>✏️ 빨간 펜으로 보완해봐</p>}
                 {phase!=="result"&&(
                   <textarea
                     value={answer}

@@ -235,11 +235,20 @@ const defaultSubjects=()=>LS.get(SUBJS_KEY)||[
 ];
 
 /* ── API 설정 ── */
-const CFG={key:LS.get("ng:key")||"",model:LS.get("ng:model")||"claude-sonnet-4-6"};
+const CFG={
+  key:LS.get("ng:key")||"",
+  model:LS.get("ng:model")||"claude-sonnet-4-6",
+  qmodel:LS.get("ng:qmodel")||"claude-haiku-4-5-20251001",
+};
 const MODELS=[
   {id:"claude-sonnet-4-6",label:"Sonnet 4.6 · 추천"},
   {id:"claude-haiku-4-5-20251001",label:"Haiku 4.5 · 가장 저렴"},
   {id:"claude-opus-4-8",label:"Opus 4.8 · 가장 똑똑"},
+];
+const QMODELS=[
+  {id:"claude-haiku-4-5-20251001",label:"Haiku 4.5 · 빠름 (권장)"},
+  {id:"claude-sonnet-4-6",label:"Sonnet 4.6 · 정확"},
+  {id:"claude-opus-4-8",label:"Opus 4.8 · 최고 품질"},
 ];
 
 // opts: { cache:bool, maxTok:number, model:string }
@@ -496,15 +505,16 @@ function Settings({onDone}){
 function KeyForm({onSaved,cta,showCancel,onCancel}){
   const [key,setKey]=useState(CFG.key);
   const [model,setModel]=useState(CFG.model);
+  const [qmodel,setQmodel]=useState(CFG.qmodel);
   const [testing,setTesting]=useState(false);
   const [err,setErr]=useState("");
   async function save(){
     if(!key.trim()){setErr("API 키를 넣어줘.");return;}
     setTesting(true);setErr("");
-    CFG.key=key.trim();CFG.model=model;
+    CFG.key=key.trim();CFG.model=model;CFG.qmodel=qmodel;
     try{
       await callClaude("ping","'ok'라고만 답해.",false);
-      LS.set("ng:key",CFG.key);LS.set("ng:model",CFG.model);
+      LS.set("ng:key",CFG.key);LS.set("ng:model",CFG.model);LS.set("ng:qmodel",CFG.qmodel);
       setTesting(false);onSaved();
     }catch(e){setTesting(false);setErr("연결 실패: "+e.message);}
   }
@@ -513,9 +523,13 @@ function KeyForm({onSaved,cta,showCancel,onCancel}){
       <div className="selectrow"><label>Anthropic API 키</label>
         <input className="field" type="password" placeholder="sk-ant-..." value={key}
           onChange={e=>setKey(e.target.value)} autoComplete="off"/></div>
-      <div className="selectrow"><label>모델</label>
+      <div className="selectrow"><label>채점·해설 모델</label>
         <select className="field" value={model} onChange={e=>setModel(e.target.value)}>
           {MODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
+        </select></div>
+      <div className="selectrow"><label>문제 생성 모델</label>
+        <select className="field" value={qmodel} onChange={e=>setQmodel(e.target.value)}>
+          {QMODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
         </select></div>
       <div className="warn">키는 <b>이 기기 브라우저에만</b> 저장돼. 파일을 공개 웹에 올릴 때 키를 하드코딩하지 마.
         키 발급·사용량: <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a></div>
@@ -967,9 +981,9 @@ function Study({deck:initial,subjects}){
     const practicalHint=practical?" 계산이나 수치를 직접 다루는 응용 문제를 선호해.":"";
     try{
       const r=await callClaude(
-        "너는 능동 회상 튜터야. 목표 개념에 대해 학습자가 스스로 설명·계산해야 하는 회상형 질문 하나를 한국어로 만들어."+practicalHint+" 자료 범위 안에서만. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. JSON만: {\"question\":\"...\",\"key_points\":[\"채점 핵심 3~5개\"]}\n\n자료:\n"+studyMat,
+        "능동 회상 튜터. 목표 개념 질문 하나 한국어로."+practicalHint+" 자료 범위만. 수식은 LaTeX($...$, $$...$$). JSON만: {\"question\":\"...\",\"key_points\":[\"채점 핵심 3~5개\"]}\n\n자료:\n"+studyMat.slice(0,5000),
         "목표 개념: "+c.name+"\n난이도: "+diffLong(c.box),
-        true,{cache:true,maxTok:1024});
+        true,{cache:true,maxTok:800,model:CFG.qmodel});
       setQ(r);setPhase("answering");
     }catch(e){setPhase("error");setErrMsg("질문 생성 실패: "+e.message);}
   }

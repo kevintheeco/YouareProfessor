@@ -387,10 +387,8 @@ function parseQuestion(txt){
     if(next){const em=new RegExp('\\n'+next+'\\s*:','i').exec(txt.slice(from));if(em)to=from+em.index;}
     vals[key]=txt.slice(from,to).trim();
   }
-  // fallback: if QUESTION: prefix missing, use entire response as question
-  const q=vals.QUESTION||txt.replace(/\n?POINTS\s*:[\s\S]*/i,'').trim();
   return{
-    question:q,
+    question:vals.QUESTION||'',
     key_points:(vals.POINTS||'').split('|').map(s=>s.trim()).filter(Boolean),
   };
 }
@@ -1323,9 +1321,15 @@ function Study({deck:initial,subjects}){
     const practicalHint=practical?" 계산이나 수치를 직접 다루는 응용 문제를 선호해.":"";
     try{
       const raw=await callAI(
-        "시험 문제 출제자. 반드시 아래 형식만 출력해:\nQUESTION: (문제)\nPOINTS: 핵심1 | 핵심2 | 핵심3\n\n문제 유형 우선순위:"+
-        (practicalHint?" ①수치 계산(최우선) ②시험형 서술 ③인과·원리":" ①수치 계산 ②시험형 서술 ③인과·원리")+
-        ". 단순 정의·용어 나열 금지. 수식 LaTeX($...$, $$...$$).\n자료:\n"+studyMat.slice(0,6000),
+        "능동 회상 튜터. 서술형·계산형 단답 질문 하나만 낸다. 객관식·선다형 절대 금지. 단순 정의·용어 나열 금지."+
+        " 다음 유형 중 하나를 골라:"+
+        " ① 인과/메커니즘 — 왜·어떻게 작동하는지"+
+        " ② 비교/대조 — 두 개념의 차이나 공통점"+
+        " ③ 조건/한계 — 성립 조건, 예외, 역설"+
+        " ④ 암기 포인트 — 시험에 자주 나오는 수치·공식·순서"+
+        " ⑤ 계산/응용 — 구체적 수치·조건 주고 결과 계산 또는 예측"+
+        (practicalHint?" ⑤번 계산·응용 유형 우선.":"")+
+        " 수식은 LaTeX($...$, $$...$$). 반드시 아래 형식으로만 출력:\nQUESTION: 질문 내용\nPOINTS: 핵심1 | 핵심2 | 핵심3 (| 구분, 3~5개)\n\n자료:\n"+studyMat.slice(0,6000),
         "목표 개념: "+c.name+"\n난이도: "+diffLong(c.box),
         false,{cache:true,maxTok:800,model:CFG.qmodel});
       setQ(parseQuestion(raw));setPhase("answering");

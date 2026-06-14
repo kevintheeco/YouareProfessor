@@ -21,7 +21,7 @@
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;background:var(--bg)}
-body{font-family:'Noto Sans KR',system-ui,sans-serif;color:var(--ink);
+body{font-family:'Noto Sans KR','Segoe UI Symbol','Apple Symbols','Symbola',system-ui,sans-serif;color:var(--ink);
   background:radial-gradient(80% 50% at 100% 0%,#EFE6FF 0%,transparent 60%),
              radial-gradient(70% 45% at 0% 8%,#FFE9E0 0%,transparent 55%),var(--bg);
   min-height:100vh}
@@ -1004,7 +1004,7 @@ function Study({deck:initial,subjects}){
       if(img)textParts.push("\n학습자가 위 이미지에 손으로 쓴 답도 포함돼. 이미지 속 내용을 읽고 함께 채점해줘.");
       userBlocks.push({type:"text",text:textParts.join("\n")});
       const r=await callClaude(
-        "너는 채점 조교야. 학습자 답안(텍스트, 손글씨 이미지, 또는 둘 다)을 보고 관대하되 정확하게 채점해. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. 모범답안에 그래프가 필요하면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, 색상: 축=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8). JSON만: {\"verdict\":\"correct|partial|incorrect\",\"score\":0-100,\"feedback\":\"맞은것/빠진것 2~4문장 (반말, 친근)\",\"why\":\"왜 그런지 자료 근거로 2~3문장\",\"model_answer\":\"모범답안 3~5문장 (필요시 SVG 그래프 포함)\"}\n\n자료:\n"+studyMat,
+        "너는 채점 조교야. 학습자 답안(텍스트, 손글씨 이미지, 또는 둘 다)을 보고 관대하되 정확하게 채점해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ 등)는 반드시 모두 LaTeX로: 인라인은 $...$, 블록은 $$..$$. 유니코드 기호 직접 사용 금지. 모범답안에 그래프가 필요하면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, 색상: 축=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8). JSON만: {\"verdict\":\"correct|partial|incorrect\",\"score\":0-100,\"feedback\":\"맞은것/빠진것 2~4문장 (반말, 친근)\",\"why\":\"왜 그런지 자료 근거로 2~3문장\",\"model_answer\":\"모범답안 3~5문장 (필요시 SVG 그래프 포함)\"}\n\n자료:\n"+studyMat,
         userBlocks,true,{cache:true,maxTok:2048});
       setEv(r);
       const v=["correct","partial","incorrect"].includes(r.verdict)?r.verdict:"partial";
@@ -1025,7 +1025,7 @@ function Study({deck:initial,subjects}){
     setPhase("dontknow");setDontknow("");setDontknowBusy(true);
     try{
       const r=await callClaude(
-        "너는 친절한 튜터야. 바로 설명 시작 — 인사말·사고 과정·'설명할게' 같은 메타 문장 없이. 학습자가 이 개념을 전혀 모르니 처음 배우는 사람에게 직관적으로(비유·예시·왜 중요한지) 반말로 5~8문장 설명해줘. 수식은 LaTeX($...$). 그래프가 도움이 되면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접, width≤380 height≤260 viewBox 사용, 축·레이블 포함, 색상: 축=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8).\n\n자료:\n"+studyMat,
+        "너는 친절한 튜터야. 바로 설명 시작 — 인사말·사고 과정·'설명할게' 같은 메타 문장 없이. 학습자가 이 개념을 전혀 모르니 처음 배우는 사람에게 직관적으로(비유·예시·왜 중요한지) 반말로 5~8문장 설명해줘. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ℝ ∇ 등)는 반드시 모두 LaTeX로($...$, $$...$$). 유니코드 기호 직접 사용 금지. 그래프가 도움이 되면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접, width≤380 height≤260 viewBox 사용, 축·레이블 포함, 색상: 축=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8).\n\n자료:\n"+studyMat,
         "개념: "+concept.name+(q?"\n원래 질문: "+q.question:""),
         false,{cache:true,maxTok:1400});
       setDontknow(r);
@@ -1036,7 +1036,7 @@ function Study({deck:initial,subjects}){
   async function explainMore(){
     setDeepBusy(true);
     try{const r=await callClaude(
-      "너는 친절한 튜터야. 자료에 근거해 더 깊이 직관적으로(비유·예시·왜) 반말로 설명해. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. 그래프·곡선·다이어그램이 이해에 도움이 되면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, font-size 11~13, 색상: 축선=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, 균형점=원형 #FFC24B, 배경=#FFFDF8).\n\n자료:\n"+studyMat,
+      "너는 친절한 튜터야. 자료에 근거해 더 깊이 직관적으로(비유·예시·왜) 반말로 설명해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ × · 등)는 반드시 모두 LaTeX로: 인라인은 $...$, 블록은 $$..$$. 유니코드 기호 직접 사용 금지. 그래프·곡선·다이어그램이 이해에 도움이 되면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, font-size 11~13, 색상: 축선=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, 균형점=원형 #FFC24B, 배경=#FFFDF8).\n\n자료:\n"+studyMat,
       "개념: "+concept.name+"\n질문: "+q.question+"\n모범답안: "+(ev?.model_answer||""),
       false,{cache:true,maxTok:1200});
       setDeeper(r);}

@@ -239,13 +239,20 @@ const MODELS=[
   {id:"claude-opus-4-8",label:"Opus 4.8 · 가장 똑똑"},
 ];
 
-async function callClaude(system,userContent,wantJson){
+// opts: { cache:bool, maxTok:number, model:string }
+async function callClaude(system,userContent,wantJson,opts={}){
   if(!CFG.key)throw new Error("NO_KEY");
+  const maxTok=opts.maxTok||(wantJson?2048:1024);
+  const hdrs={"content-type":"application/json","x-api-key":CFG.key,
+    "anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"};
+  if(opts.cache)hdrs["anthropic-beta"]="prompt-caching-2024-07-31";
+  const sysPay=opts.cache
+    ?[{type:"text",text:system,cache_control:{type:"ephemeral"}}]
+    :system;
   const res=await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",
-    headers:{"content-type":"application/json","x-api-key":CFG.key,
-      "anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-    body:JSON.stringify({model:CFG.model,max_tokens:wantJson?2048:1024,system,messages:[{role:"user",content:userContent}]}),
+    method:"POST",headers:hdrs,
+    body:JSON.stringify({model:opts.model||CFG.model,max_tokens:maxTok,system:sysPay,
+      messages:[{role:"user",content:userContent}]}),
   });
   if(!res.ok){let m="API "+res.status;try{const j=await res.json();if(j.error?.message)m=j.error.message}catch{}throw new Error(m)}
   const data=await res.json();
@@ -803,14 +810,24 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
       try{
         const r=await callClaude(
           "너는 학습 자료에서 핵심 개념을 뽑는 조교야. 능동 회상으로 시험 볼 만한 핵심 개념 8~15개를 짧은 명사구로 뽑아. 자료에 실제 있는 것만. JSON만: {\"concepts\":[\"...\"]}",
-          "자료:\n\n"+fullMaterial.slice(0,12000),true);
+          "자료:\n\n"+fullMaterial.slice(0,12000),true,{maxTok:512});
         concepts=Array.isArray(r.concepts)?r.concepts:[];
       }catch(e){setErr("개념 뽑기 실패: "+e.message);setBusy(false);return;}
       if(!concepts.length)concepts=["전체 자료"];
     }
 
+    // 요약본 생성 (2000자 이상일 때만 — 이후 학습 호출 토큰 절감용)
+    let summary="";
+    if(fullMaterial.length>2000){
+      try{
+        summary=await callClaude(
+          "너는 학습 자료 요약 전문가야. 핵심 개념·공식·예시를 빠짐없이 압축해. 수식·기호 원문 그대로. 텍스트만 출력.",
+          "자료:\n"+fullMaterial.slice(0,20000),false,{maxTok:900});
+      }catch(e){console.warn("요약 생성 실패",e);}
+    }
+
     const id=uid();
-    const deck={id,name:finalName,subjId,material:fullMaterial,createdAt:Date.now(),
+    const deck={id,name:finalName,subjId,material:fullMaterial,summary,createdAt:Date.now(),
       concepts:concepts.map(nm=>({id:uid(),name:String(nm).slice(0,80),box:1,dueAt:0,reps:0,lapses:0}))};
     LS.set(dk(id),deck);
     LS.set(DECKS_KEY,[{id,name:deck.name,subjId},...(LS.get(DECKS_KEY)||[])]);
@@ -891,6 +908,9 @@ function Study({deck:initial,subjects}){
 
   function persist(d){setDeck(d);LS.set(dk(d.id),d);}
 
+  // 세션 전체에서 캐시 공유: summary 있으면 우선 사용 (8000자 이하)
+  const studyMat=deck.summary||deck.material.slice(0,8000);
+
   async function next(d,forceId){
     d=d||deck;
     setPhase("loading");setQ(null);setEv(null);setAnswer("");setDeeper("");setErrMsg("");setSubmitErr("");
@@ -900,8 +920,9 @@ function Study({deck:initial,subjects}){
     setConcept(c);last.current=c.id;
     try{
       const r=await callClaude(
-        "너는 능동 회상 튜터야. 자료와 목표 개념에 대해 학습자가 스스로 설명/계산해야 하는 회상형 질문 하나를 한국어로 만들어. 왜·어떻게·언제 쓰는지·반례를 선호. 난이도: "+diffLong(c.box)+". 자료 범위 안에서만. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. JSON만: {\"question\":\"...\",\"key_points\":[\"채점 핵심 3~5개\"]}",
-        "목표 개념: "+c.name+"\n\n자료:\n"+d.material.slice(0,12000),true);
+        "너는 능동 회상 튜터야. 목표 개념에 대해 학습자가 스스로 설명·계산해야 하는 회상형 질문 하나를 한국어로 만들어. 왜·어떻게·언제 쓰는지·반례를 선호. 자료 범위 안에서만. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. JSON만: {\"question\":\"...\",\"key_points\":[\"채점 핵심 3~5개\"]}\n\n자료:\n"+studyMat,
+        "목표 개념: "+c.name+"\n난이도: "+diffLong(c.box),
+        true,{cache:true,maxTok:1024});
       setQ(r);setPhase("answering");
     }catch(e){setPhase("error");setErrMsg("질문 생성 실패: "+e.message);}
   }
@@ -920,11 +941,10 @@ function Study({deck:initial,subjects}){
       const textParts=["목표 개념: "+concept.name,"질문: "+q.question,"채점 핵심: "+JSON.stringify(q.key_points||[])];
       if(hasTxt)textParts.push("\n학습자 텍스트 답안:\n"+answer.trim());
       if(img)textParts.push("\n학습자가 위 이미지에 손으로 쓴 답도 포함돼. 이미지 속 내용을 읽고 함께 채점해줘.");
-      textParts.push("\n\n자료:\n"+deck.material.slice(0,9000));
       userBlocks.push({type:"text",text:textParts.join("\n")});
       const r=await callClaude(
-        "너는 채점 조교야. 학습자 답안(텍스트, 손글씨 이미지, 또는 둘 다)을 보고 관대하되 정확하게 채점해. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. JSON만: {\"verdict\":\"correct|partial|incorrect\",\"score\":0-100,\"feedback\":\"맞은것/빠진것 2~4문장 (반말, 친근)\",\"why\":\"왜 그런지 자료 근거로 2~3문장\",\"model_answer\":\"모범답안 3~5문장\"}",
-        userBlocks,true);
+        "너는 채점 조교야. 학습자 답안(텍스트, 손글씨 이미지, 또는 둘 다)을 보고 관대하되 정확하게 채점해. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. JSON만: {\"verdict\":\"correct|partial|incorrect\",\"score\":0-100,\"feedback\":\"맞은것/빠진것 2~4문장 (반말, 친근)\",\"why\":\"왜 그런지 자료 근거로 2~3문장\",\"model_answer\":\"모범답안 3~5문장\"}\n\n자료:\n"+studyMat,
+        userBlocks,true,{cache:true,maxTok:2048});
       setEv(r);
       const v=["correct","partial","incorrect"].includes(r.verdict)?r.verdict:"partial";
       const uc=schedule(concept,v);
@@ -935,8 +955,10 @@ function Study({deck:initial,subjects}){
 
   async function explainMore(){
     setDeepBusy(true);
-    try{const r=await callClaude("너는 친절한 튜터야. 자료에 근거해 더 깊이 직관적으로(비유·예시·왜) 반말로 4~6문장. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용.",
-      "개념: "+concept.name+"\n질문: "+q.question+"\n모범답안: "+(ev?.model_answer||"")+"\n\n자료:\n"+deck.material.slice(0,9000),false);
+    try{const r=await callClaude(
+      "너는 친절한 튜터야. 자료에 근거해 더 깊이 직관적으로(비유·예시·왜) 반말로 4~6문장. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용.\n\n자료:\n"+studyMat,
+      "개념: "+concept.name+"\n질문: "+q.question+"\n모범답안: "+(ev?.model_answer||""),
+      false,{cache:true,maxTok:1200});
       setDeeper(r);}
     catch(e){setDeeper("실패: "+e.message);}
     setDeepBusy(false);

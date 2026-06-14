@@ -259,7 +259,7 @@ function fixJson(str){
     if(!inStr){out+=c;if(c==='"')inStr=true;i++;}
     else if(c==='\\'){
       const n=str[i+1];
-      if('"\\\/bfnrt'.indexOf(n)!==-1){out+=c+n;i+=2;}
+      if(n==='"'||n==='\\'||n==='/'){out+=c+n;i+=2;}
       else if(n==='u'&&/[0-9a-fA-F]{4}/.test(str.slice(i+2,i+6))){out+=str.slice(i,i+6);i+=6;}
       else{out+='\\\\';i++;}
     }
@@ -269,6 +269,46 @@ function fixJson(str){
     else{out+=c;i++;}
   }
   return out;
+}
+// Parse grading response in plain-text structured format (no JSON → no escape issues)
+function parseGrading(txt){
+  const KEYS=['VERDICT','SCORE','FEEDBACK','WHY','ANSWER'];
+  const vals={};
+  for(let i=0;i<KEYS.length;i++){
+    const key=KEYS[i],next=KEYS[i+1];
+    const sm=new RegExp('(?:^|\\n)'+key+'\\s*:[\\t ]*','i').exec(txt);
+    if(!sm)continue;
+    const from=sm.index+sm[0].length;
+    let to=txt.length;
+    if(next){const em=new RegExp('\\n'+next+'\\s*:','i').exec(txt.slice(from));if(em)to=from+em.index;}
+    vals[key]=txt.slice(from,to).trim();
+  }
+  const v=(vals.VERDICT||'').toLowerCase().replace(/[^a-z]/g,'');
+  return{
+    verdict:['correct','partial','incorrect'].includes(v)?v:'partial',
+    score:Math.min(100,Math.max(0,parseInt(vals.SCORE)||50)),
+    feedback:vals.FEEDBACK||'',
+    why:vals.WHY||'',
+    model_answer:vals.ANSWER||'',
+  };
+}
+// Parse question response in plain-text structured format
+function parseQuestion(txt){
+  const KEYS=['QUESTION','POINTS'];
+  const vals={};
+  for(let i=0;i<KEYS.length;i++){
+    const key=KEYS[i],next=KEYS[i+1];
+    const sm=new RegExp('(?:^|\\n)'+key+'\\s*:[\\t ]*','i').exec(txt);
+    if(!sm)continue;
+    const from=sm.index+sm[0].length;
+    let to=txt.length;
+    if(next){const em=new RegExp('\\n'+next+'\\s*:','i').exec(txt.slice(from));if(em)to=from+em.index;}
+    vals[key]=txt.slice(from,to).trim();
+  }
+  return{
+    question:vals.QUESTION||'',
+    key_points:(vals.POINTS||'').split('|').map(s=>s.trim()).filter(Boolean),
+  };
 }
 async function callClaude(system,userContent,wantJson,opts={}){
   if(!CFG.key)throw new Error("NO_KEY");
@@ -1003,11 +1043,11 @@ function Study({deck:initial,subjects}){
     setConcept(c);last.current=c.id;
     const practicalHint=practical?" 계산이나 수치를 직접 다루는 응용 문제를 선호해.":"";
     try{
-      const r=await callClaude(
-        "능동 회상 튜터. 자료의 핵심 주제·목적을 먼저 파악한 뒤, 목표 개념이 이 자료에서 어떤 맥락으로 쓰이는지 이해하고 질문을 만들어."+practicalHint+" 개념 이름만 보지 말고 자료 전체 맥락에서 이 개념의 핵심 역할을 묻는 질문이어야 해. 수식은 LaTeX($...$, $$...$$). JSON만: {\"question\":\"...\",\"key_points\":[\"채점 핵심 3~5개\"]}\n\n자료:\n"+studyMat.slice(0,6000),
+      const raw=await callClaude(
+        "능동 회상 튜터. 자료의 핵심 주제·목적을 먼저 파악한 뒤, 목표 개념이 이 자료에서 어떤 맥락으로 쓰이는지 이해하고 질문을 만들어."+practicalHint+" 개념 이름만 보지 말고 자료 전체 맥락에서 이 개념의 핵심 역할을 묻는 질문이어야 해. 수식은 LaTeX($...$, $$...$$). 다음 형식으로만 출력:\nQUESTION: 질문 내용\nPOINTS: 핵심1 | 핵심2 | 핵심3 (| 구분, 3~5개)\n\n자료:\n"+studyMat.slice(0,6000),
         "목표 개념: "+c.name+"\n난이도: "+diffLong(c.box),
-        true,{cache:true,maxTok:800,model:CFG.qmodel});
-      setQ(r);setPhase("answering");
+        false,{cache:true,maxTok:800,model:CFG.qmodel});
+      setQ(parseQuestion(raw));setPhase("answering");
     }catch(e){setPhase("error");setErrMsg("질문 생성 실패: "+e.message);}
   }
   useEffect(()=>{next(initial);},[]);
@@ -1026,10 +1066,10 @@ function Study({deck:initial,subjects}){
       if(hasTxt)textParts.push("\n학습자 텍스트 답안:\n"+answer.trim());
       if(img)textParts.push("\n학습자가 위 이미지에 손으로 쓴 답도 포함돼. 이미지 속 내용을 읽고 함께 채점해줘.");
       userBlocks.push({type:"text",text:textParts.join("\n")});
-      const r=await callClaude(
-        "너는 채점 조교야. 학습자 답안(텍스트, 손글씨 이미지, 또는 둘 다)을 보고 관대하되 정확하게 채점해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ 등)는 반드시 모두 LaTeX로: 인라인은 $...$, 블록은 $$..$$. 유니코드 기호 직접 사용 금지. 모범답안에 그래프가 필요하면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, 색상: 축=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8). JSON만: {\"verdict\":\"correct|partial|incorrect\",\"score\":0-100,\"feedback\":\"맞은것/빠진것 2~4문장 (반말, 친근)\",\"why\":\"왜 그런지 자료 근거로 2~3문장\",\"model_answer\":\"모범답안 3~5문장 (필요시 SVG 그래프 포함)\"}\n\n자료:\n"+studyMat,
-        userBlocks,true,{cache:true,maxTok:2048});
-      setEv(r);
+      const gradingRaw=await callClaude(
+        "너는 채점 조교야. 학습자 답안(텍스트, 손글씨 이미지, 또는 둘 다)을 보고 관대하되 정확하게 채점해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ 등)는 반드시 모두 LaTeX로: 인라인은 $...$, 블록은 $$..$$. 유니코드 기호 직접 사용 금지. 모범답안에 그래프가 필요하면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, 색상: 축=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8). 다음 형식으로만 출력 (JSON·코드블록 없이):\nVERDICT: correct 또는 partial 또는 incorrect\nSCORE: 0-100 숫자만\nFEEDBACK: 맞은 것·빠진 것 2~4문장 (반말, 친근)\nWHY: 왜 그런지 자료 근거 2~3문장\nANSWER: 모범답안 3~5문장 (필요시 SVG 그래프 포함)\n\n자료:\n"+studyMat,
+        userBlocks,false,{cache:true,maxTok:2048});
+      const r=parseGrading(gradingRaw);setEv(r);
       const v=["correct","partial","incorrect"].includes(r.verdict)?r.verdict:"partial";
       const uc=schedule(concept,v);
       persist({...deck,concepts:deck.concepts.map(c=>c.id===concept.id?uc:c)});

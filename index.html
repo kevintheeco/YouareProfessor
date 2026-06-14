@@ -915,6 +915,8 @@ function Study({deck:initial,subjects}){
   const [submitErr,setSubmitErr]=useState("");
   const [deeper,setDeeper]=useState("");
   const [deepBusy,setDeepBusy]=useState(false);
+  const [dontknow,setDontknow]=useState("");
+  const [dontknowBusy,setDontknowBusy]=useState(false);
   const [count,setCount]=useState(0);
   const last=useRef(null);
   const padRef=useRef(null);
@@ -924,16 +926,17 @@ function Study({deck:initial,subjects}){
   // 세션 전체에서 캐시 공유: summary 있으면 우선 사용 (8000자 이하)
   const studyMat=deck.summary||deck.material.slice(0,8000);
 
-  async function next(d,forceId){
+  async function next(d,forceId,practical){
     d=d||deck;
-    setPhase("loading");setQ(null);setEv(null);setAnswer("");setDeeper("");setErrMsg("");setSubmitErr("");
+    setPhase("loading");setQ(null);setEv(null);setAnswer("");setDeeper("");setDontknow("");setErrMsg("");setSubmitErr("");
     padRef.current?.clear();
     const c=forceId?(d.concepts||[]).find(x=>x.id===forceId)||pickConcept(d,last.current):pickConcept(d,last.current);
     if(!c){setPhase("error");setErrMsg("질문할 개념이 없어.");return;}
     setConcept(c);last.current=c.id;
+    const practicalHint=practical?" 계산이나 수치를 직접 다루는 응용 문제를 선호해.":"";
     try{
       const r=await callClaude(
-        "너는 능동 회상 튜터야. 목표 개념에 대해 학습자가 스스로 설명·계산해야 하는 회상형 질문 하나를 한국어로 만들어. 왜·어떻게·언제 쓰는지·반례를 선호. 자료 범위 안에서만. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. JSON만: {\"question\":\"...\",\"key_points\":[\"채점 핵심 3~5개\"]}\n\n자료:\n"+studyMat,
+        "너는 능동 회상 튜터야. 목표 개념에 대해 학습자가 스스로 설명·계산해야 하는 회상형 질문 하나를 한국어로 만들어."+practicalHint+" 자료 범위 안에서만. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. JSON만: {\"question\":\"...\",\"key_points\":[\"채점 핵심 3~5개\"]}\n\n자료:\n"+studyMat,
         "목표 개념: "+c.name+"\n난이도: "+diffLong(c.box),
         true,{cache:true,maxTok:1024});
       setQ(r);setPhase("answering");
@@ -966,6 +969,25 @@ function Study({deck:initial,subjects}){
     }catch(e){setPhase("answering");setSubmitErr("채점 실패: "+e.message);}
   }
 
+  async function handleDontKnow(){
+    const arc=LS.get("ng:dontknow")||[];
+    arc.unshift({id:uid(),deckId:deck.id,conceptId:concept.id,
+      conceptName:concept.name,question:q?.question||"",ts:Date.now()});
+    LS.set("ng:dontknow",arc.slice(0,200));
+    const uc={...concept,box:1,dueAt:0};
+    persist({...deck,concepts:deck.concepts.map(c=>c.id===concept.id?uc:c)});
+    setConcept(uc);
+    setPhase("dontknow");setDontknow("");setDontknowBusy(true);
+    try{
+      const r=await callClaude(
+        "너는 친절한 튜터야. 학습자가 이 개념을 전혀 모른다고 했어. 처음 배우는 사람에게 직관적으로(비유·예시·왜 중요한지) 설명해줘. 반말로 5~8문장. 수식은 LaTeX($...$). 그래프가 도움이 되면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접, width≤380 height≤260 viewBox 사용, 축·레이블 포함, 색상: 축=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8).\n\n자료:\n"+studyMat,
+        "개념: "+concept.name+(q?"\n원래 질문: "+q.question:""),
+        false,{cache:true,maxTok:1400});
+      setDontknow(r);
+    }catch(e){setDontknow("설명 불러오기 실패: "+e.message);}
+    setDontknowBusy(false);
+  }
+
   async function explainMore(){
     setDeepBusy(true);
     try{const r=await callClaude(
@@ -983,7 +1005,7 @@ function Study({deck:initial,subjects}){
   const v=ev?.verdict;
   const vTone=v==="correct"?"mint":v==="incorrect"?"rose":"gold";
   const vLabel=v==="correct"?"오 정확해! 💯":v==="incorrect"?"이건 다시 보자 🔁":"거의 다 왔어 ✏️";
-  const isActive=phase==="answering"||phase==="grading"||phase==="result";
+  const isActive=phase==="answering"||phase==="grading"||phase==="result"||phase==="dontknow";
 
   return(
     <section className="study">
@@ -1051,43 +1073,62 @@ function Study({deck:initial,subjects}){
                   )}
                   <div className="nextrow">
                     <span className="nn">{v==="correct"?"다음 복습은 더 뒤로 미뤄둘게 👍":"이건 곧 또 물어볼 거야"}</span>
-                    <button className="btn pri" onClick={()=>next()}>다음 문제 →</button>
+                    <button className="btn pri" onClick={()=>next(deck,null,true)}>넘어가요 →</button>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* ── 오른쪽: 노트 캔버스 ── */}
-            <div className="card" style={{padding:14,display:"flex",flexDirection:"column",gap:10}}>
-              {phase==="grading"&&(
-                <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0"}}>
-                  <div className="spinner" style={{width:20,height:20,borderWidth:2}}/>
-                  <span className="muted" style={{fontSize:13}}>채점 중…</span>
-                </div>
-              )}
-              <PenPad ref={padRef} kind="answer" hideOcr penOnlyDefault={true} disabled={phase==="grading"||phase==="result"}/>
-              {phase!=="result"&&(
-                <textarea
-                  value={answer}
-                  onChange={e=>setAnswer(e.target.value)}
-                  disabled={phase==="grading"}
-                  placeholder="텍스트로도 답할 수 있어 (선택사항)"
-                  style={{width:"100%",minHeight:72,padding:"8px 10px",borderRadius:10,
-                    border:"1.5px solid var(--line)",fontFamily:"'Noto Sans KR',sans-serif",
-                    fontSize:13,resize:"vertical",outline:"none",background:"var(--bg)",color:"var(--ink)"}}
-                />
-              )}
-              {phase!=="result"&&(
-                <>
-                  {submitErr&&<div className="err">{submitErr}</div>}
-                  <div className="row">
-                    <button className="btn pri" onClick={submit} disabled={phase==="grading"}>
-                      {phase==="grading"?"채점 중…":"제출 ✓"}
-                    </button>
+            {/* ── 오른쪽: 노트 캔버스 / 몰라요 강의 ── */}
+            {phase==="dontknow"?(
+              <div className="card" style={{padding:20,display:"flex",flexDirection:"column",gap:14,overflowY:"auto",maxHeight:"calc(100vh - 280px)"}}>
+                <div className="bl" style={{fontSize:13,fontWeight:700}}>📖 이 개념 먼저 배워보자</div>
+                {dontknowBusy
+                  ?<div style={{display:"flex",gap:10,alignItems:"center"}}><div className="spinner" style={{width:20,height:20,borderWidth:2}}/><span className="muted" style={{fontSize:13}}>설명 불러오는 중…</span></div>
+                  :<MathText text={dontknow} tag="div" style={{fontSize:14,lineHeight:1.9}}/>
+                }
+                {!dontknowBusy&&(
+                  <div className="row" style={{marginTop:6}}>
+                    <button className="btn pri" onClick={()=>next(deck,concept.id)}>다시 도전 →</button>
+                    <button className="btn gho" onClick={()=>next(deck,null,true)}>넘어가요 →</button>
                   </div>
-                </>
-              )}
-            </div>
+                )}
+              </div>
+            ):(
+              <div className="card" style={{padding:14,display:"flex",flexDirection:"column",gap:10}}>
+                {phase==="grading"&&(
+                  <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0"}}>
+                    <div className="spinner" style={{width:20,height:20,borderWidth:2}}/>
+                    <span className="muted" style={{fontSize:13}}>채점 중…</span>
+                  </div>
+                )}
+                <PenPad ref={padRef} kind="answer" hideOcr penOnlyDefault={true} disabled={phase==="grading"||phase==="result"}/>
+                {phase!=="result"&&(
+                  <textarea
+                    value={answer}
+                    onChange={e=>setAnswer(e.target.value)}
+                    disabled={phase==="grading"}
+                    placeholder="텍스트로도 답할 수 있어 (선택사항)"
+                    style={{width:"100%",minHeight:72,padding:"8px 10px",borderRadius:10,
+                      border:"1.5px solid var(--line)",fontFamily:"'Noto Sans KR',sans-serif",
+                      fontSize:13,resize:"vertical",outline:"none",background:"var(--bg)",color:"var(--ink)"}}
+                  />
+                )}
+                {phase!=="result"&&(
+                  <>
+                    {submitErr&&<div className="err">{submitErr}</div>}
+                    <div className="row">
+                      <button className="btn pri" onClick={submit} disabled={phase==="grading"}>
+                        {phase==="grading"?"채점 중…":"제출 ✓"}
+                      </button>
+                      <button className="btn gho" onClick={handleDontKnow} disabled={phase==="grading"}>
+                        몰라요 😅
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
           </div>
         )}

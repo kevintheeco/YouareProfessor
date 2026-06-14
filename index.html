@@ -1803,6 +1803,7 @@ function Study({deck:initial,subjects}){
 /* ── SVG 살균 ── */
 function sanitizeSvg(s){
   return s
+    .replace(/<!--[\s\S]*?-->/g,"")
     .replace(/<script[\s\S]*?<\/script>/gi,"")
     .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi,"")
     .replace(/javascript\s*:/gi,"");
@@ -1815,8 +1816,10 @@ function sanitizeSvg(s){
 function MathText({text,tag:Tag="p",className,style}){
   if(!text)return <Tag className={className} style={style}/>;
   const nodes=[];
-  // 코드펜스 안에 SVG가 오는 경우도 추출해서 렌더
-  var cleaned=text.replace(/```[\w]*\s*(<svg[\s\S]*?<\/svg>)\s*```/gi,"$1");
+  // HTML 주석 제거 + 코드펜스 안 SVG 추출
+  var cleaned=text
+    .replace(/<!--[\s\S]*?-->/g,"")
+    .replace(/```[\w]*\s*(<svg[\s\S]*?<\/svg>)\s*```/gi,"$1");
   var svgParts=cleaned.split(/(<svg[\s\S]*?<\/svg>)/i);
   svgParts.forEach(function(seg,si){
     if(si%2===1){

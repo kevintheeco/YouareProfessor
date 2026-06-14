@@ -1321,7 +1321,14 @@ function Study({deck:initial,subjects}){
     const practicalHint=practical?" 계산이나 수치를 직접 다루는 응용 문제를 선호해.":"";
     try{
       const raw=await callAI(
-        "능동 회상 튜터. 자료의 핵심 주제·목적을 먼저 파악한 뒤, 목표 개념이 이 자료에서 어떤 맥락으로 쓰이는지 이해하고 질문을 만들어."+practicalHint+" 개념 이름만 보지 말고 자료 전체 맥락에서 이 개념의 핵심 역할을 묻는 질문이어야 해. 수식은 LaTeX($...$, $$...$$). 다음 형식으로만 출력:\nQUESTION: 질문 내용\nPOINTS: 핵심1 | 핵심2 | 핵심3 (| 구분, 3~5개)\n\n자료:\n"+studyMat.slice(0,6000),
+        "능동 회상 튜터. 단순 정의·용어 설명 질문은 절대 금지. 다음 유형 중 하나를 골라 질문해:"+
+        " ① 인과/메커니즘 — 왜·어떻게 (예: 이자율 상승이 투자에 미치는 경로)"+
+        " ② 비교/대조 — 두 개념의 차이나 공통점 (예: A vs B 결정요인 비교)"+
+        " ③ 조건/한계 — 성립 조건, 예외, 역설 (예: 유동성 함정이 발생하는 조건)"+
+        " ④ 암기 포인트 — 시험에 자주 나오는 수치·공식·순서 (예: IS-LM 균형 이동 방향)"+
+        " ⑤ 응용 — 특정 상황에서 결과 예측"+
+        (practicalHint?" 계산·수치를 직접 다루는 ⑤번 유형 우선.":"")+
+        " 수식은 LaTeX($...$, $$...$$). 다음 형식으로만 출력:\nQUESTION: 질문 내용\nPOINTS: 핵심1 | 핵심2 | 핵심3 (| 구분, 3~5개)\n\n자료:\n"+studyMat.slice(0,6000),
         "목표 개념: "+c.name+"\n난이도: "+diffLong(c.box),
         false,{cache:true,maxTok:800,model:CFG.qmodel});
       setQ(parseQuestion(raw));setPhase("answering");

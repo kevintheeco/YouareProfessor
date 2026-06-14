@@ -169,6 +169,9 @@ canvas.pad.eraser{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org
 .katex-display{overflow-x:auto !important;overflow-y:hidden;padding:4px 0;margin:6px 0 !important}
 .katex{font-size:1.08em}
 .katex-display>.katex{text-align:center}
+.graph-block{margin:14px 0;display:flex;justify-content:center}
+.graph-block svg{max-width:100%;height:auto;border-radius:14px;
+  background:#FFFDF8;padding:10px;box-shadow:0 2px 12px rgba(108,92,231,.1);}
 .msgcard{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;padding:38px 22px}
 .result{display:flex;flex-direction:column;gap:15px}
 .verdict{display:flex;align-items:center;gap:9px;font-family:'Jua',sans-serif;font-size:19px}
@@ -953,7 +956,7 @@ function Study({deck:initial,subjects}){
       if(img)textParts.push("\n학습자가 위 이미지에 손으로 쓴 답도 포함돼. 이미지 속 내용을 읽고 함께 채점해줘.");
       userBlocks.push({type:"text",text:textParts.join("\n")});
       const r=await callClaude(
-        "너는 채점 조교야. 학습자 답안(텍스트, 손글씨 이미지, 또는 둘 다)을 보고 관대하되 정확하게 채점해. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. JSON만: {\"verdict\":\"correct|partial|incorrect\",\"score\":0-100,\"feedback\":\"맞은것/빠진것 2~4문장 (반말, 친근)\",\"why\":\"왜 그런지 자료 근거로 2~3문장\",\"model_answer\":\"모범답안 3~5문장\"}\n\n자료:\n"+studyMat,
+        "너는 채점 조교야. 학습자 답안(텍스트, 손글씨 이미지, 또는 둘 다)을 보고 관대하되 정확하게 채점해. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. 모범답안에 그래프가 필요하면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, 색상: 축=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8). JSON만: {\"verdict\":\"correct|partial|incorrect\",\"score\":0-100,\"feedback\":\"맞은것/빠진것 2~4문장 (반말, 친근)\",\"why\":\"왜 그런지 자료 근거로 2~3문장\",\"model_answer\":\"모범답안 3~5문장 (필요시 SVG 그래프 포함)\"}\n\n자료:\n"+studyMat,
         userBlocks,true,{cache:true,maxTok:2048});
       setEv(r);
       const v=["correct","partial","incorrect"].includes(r.verdict)?r.verdict:"partial";
@@ -966,7 +969,7 @@ function Study({deck:initial,subjects}){
   async function explainMore(){
     setDeepBusy(true);
     try{const r=await callClaude(
-      "너는 친절한 튜터야. 자료에 근거해 더 깊이 직관적으로(비유·예시·왜) 반말로 4~6문장. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용.\n\n자료:\n"+studyMat,
+      "너는 친절한 튜터야. 자료에 근거해 더 깊이 직관적으로(비유·예시·왜) 반말로 설명해. 수식·행렬·그리스 문자는 LaTeX로: 인라인은 $...$, 블록은 $$...$$ 사용. 그래프·곡선·다이어그램이 이해에 도움이 되면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, font-size 11~13, 색상: 축선=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, 균형점=원형 #FFC24B, 배경=#FFFDF8).\n\n자료:\n"+studyMat,
       "개념: "+concept.name+"\n질문: "+q.question+"\n모범답안: "+(ev?.model_answer||""),
       false,{cache:true,maxTok:1200});
       setDeeper(r);}
@@ -1093,40 +1096,56 @@ function Study({deck:initial,subjects}){
   );
 }
 
-/* ── 수식 렌더러 ──
-   split(캡처그룹) → 홀수 인덱스=수식, 짝수 인덱스=일반텍스트
-   텍스트는 React 텍스트 노드, 수식만 katex.renderToString 사용
+/* ── SVG 살균 ── */
+function sanitizeSvg(s){
+  return s
+    .replace(/<script[\s\S]*?<\/script>/gi,"")
+    .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi,"")
+    .replace(/javascript\s*:/gi,"");
+}
+
+/* ── 수식+그래프 렌더러 ──
+   1단계: <svg>…</svg> 블록 → .graph-block 렌더
+   2단계: 나머지 텍스트 → $…$/$$…$$ KaTeX 렌더
 ── */
 function MathText({text,tag:Tag="p",className,style}){
   if(!text)return <Tag className={className} style={style}/>;
-  // 캡처그룹 split: 홀수 인덱스에 매칭된 수식이 들어옴
-  const parts=text.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/);
   const nodes=[];
-  parts.forEach(function(part,i){
-    if(i%2===0){
-      // 일반 텍스트 — 줄바꿈 처리
-      var lines=part.split("\n");
-      lines.forEach(function(line,j){
-        if(line)nodes.push(line);
-        if(j<lines.length-1)nodes.push(React.createElement("br",{key:"br"+i+"_"+j}));
-      });
-    }else{
-      // 수식 — $...$ 또는 $$...$$
-      var disp=part.charAt(1)==="$";
-      var latex=part.slice(disp?2:1,disp?-2:-1).trim();
-      if(window.katex){
-        try{
-          var html=window.katex.renderToString(latex,{displayMode:disp,throwOnError:false,strict:false});
-          nodes.push(React.createElement("span",{
-            key:"k"+i,
-            style:disp?{display:"block",textAlign:"center",overflowX:"auto",margin:"10px 0"}:undefined,
-            dangerouslySetInnerHTML:{__html:html}
-          }));
-          return;
-        }catch(e){console.warn("KaTeX:",latex,e);}
-      }
-      nodes.push(React.createElement("span",{key:"k"+i},part));
+  var svgParts=text.split(/(<svg[\s\S]*?<\/svg>)/i);
+  svgParts.forEach(function(seg,si){
+    if(si%2===1){
+      nodes.push(React.createElement("div",{
+        key:"svg"+si,className:"graph-block",
+        dangerouslySetInnerHTML:{__html:sanitizeSvg(seg)}
+      }));
+      return;
     }
+    var parts=seg.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/);
+    parts.forEach(function(part,i){
+      var key=si+"_"+i;
+      if(i%2===0){
+        var lines=part.split("\n");
+        lines.forEach(function(line,j){
+          if(line)nodes.push(line);
+          if(j<lines.length-1)nodes.push(React.createElement("br",{key:"br"+key+"_"+j}));
+        });
+      }else{
+        var disp=part.charAt(1)==="$";
+        var latex=part.slice(disp?2:1,disp?-2:-1).trim();
+        if(window.katex){
+          try{
+            var html=window.katex.renderToString(latex,{displayMode:disp,throwOnError:false,strict:false});
+            nodes.push(React.createElement("span",{
+              key:"k"+key,
+              style:disp?{display:"block",textAlign:"center",overflowX:"auto",margin:"10px 0"}:undefined,
+              dangerouslySetInnerHTML:{__html:html}
+            }));
+            return;
+          }catch(e){console.warn("KaTeX:",latex,e);}
+        }
+        nodes.push(React.createElement("span",{key:"k"+key},part));
+      }
+    });
   });
   return React.createElement(Tag,{className:className,style:style},nodes);
 }

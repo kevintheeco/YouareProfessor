@@ -209,6 +209,9 @@ a{color:var(--pri-d)}
 .derive-fb{font-size:12.5px;color:var(--sub);padding:4px 0}
 .annot-wrap{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px}
 .annot-answer{background:#F0FFF8;border:1px solid #B2DFD0;border-radius:12px;padding:12px 14px;font-size:13.5px;line-height:1.85}
+.annot-section{display:flex;flex-direction:column;gap:10px;padding:12px 0 4px;border-top:1px solid var(--line);margin-top:4px}
+.annot-hl-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.annot-q-bar{display:flex;align-items:center;gap:8px;justify-content:space-between}
 .qcard{position:sticky;top:16px;max-height:calc(100vh - 100px);overflow-y:auto;display:flex;flex-direction:column}
 .pg-nav{display:flex;align-items:center;justify-content:space-between;padding:4px 0 8px;border-bottom:1px solid var(--line);margin-bottom:4px}
 .pg-nav .pg-btn{background:none;border:none;font-size:20px;cursor:pointer;color:var(--pri);padding:2px 10px;border-radius:8px;line-height:1}
@@ -807,13 +810,13 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
   function syncSize(){
     const c=cvs.current;if(!c)return;
     const p=c.parentElement;if(!p)return;
-    const dpr=window.devicePixelRatio||1;
-    const w=p.offsetWidth,h=p.offsetHeight;
+    const rect=p.getBoundingClientRect();
+    const w=Math.round(rect.width),h=Math.round(rect.height);
     if(!w||!h)return;
-    if(c.width!==Math.round(w*dpr)||c.height!==Math.round(h*dpr)){
-      c.width=Math.round(w*dpr);c.height=Math.round(h*dpr);
-      const ctx=c.getContext("2d");ctx.setTransform(1,0,0,1,0,0);ctx.scale(dpr,dpr);
-    }
+    const dpr=window.devicePixelRatio||1;
+    c.style.width=w+"px";c.style.height=h+"px";
+    c.width=Math.round(w*dpr);c.height=Math.round(h*dpr);
+    const ctx=c.getContext("2d");ctx.setTransform(1,0,0,1,0,0);ctx.scale(dpr,dpr);
     redraw();
   }
   function redraw(){
@@ -828,7 +831,7 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
       ctx.stroke();
     });
   }
-  useEffect(()=>{
+  React.useLayoutEffect(()=>{
     syncSize();
     const parent=cvs.current?.parentElement;if(!parent)return;
     const ro=new ResizeObserver(syncSize);ro.observe(parent);
@@ -871,10 +874,74 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
   const up=()=>{drawing.current=false;};
   return(
     <canvas ref={cvs}
-      style={{position:"absolute",inset:0,width:"100%",height:"100%",
+      style={{position:"absolute",top:0,left:0,
         mixBlendMode:"multiply",touchAction:"none",zIndex:5,
         cursor:disabled?"not-allowed":tool==="eraser"?"cell":"crosshair",
         pointerEvents:disabled?"none":"auto"}}
+      onPointerDown={down} onPointerMove={move} onPointerUp={up}
+      onPointerLeave={up} onPointerCancel={up}
+      onContextMenu={e=>{e.preventDefault();const p=pt(e);eraseAt(p.x,p.y);}}/>
+  );
+});
+
+/* ── 질문 손글씨 패드 (단독, 배경 있음) ── */
+const QuestionPad=React.forwardRef(function QuestionPad({disabled},fwdRef){
+  const cvs=useRef(null);const strokes=useRef([]);const drawing=useRef(false);
+  React.useImperativeHandle(fwdRef,()=>({
+    getImageBase64:()=>cvs.current?.toDataURL("image/png").split(",")[1]||null,
+    hasStrokes:()=>strokes.current.length>0,
+    clear:()=>{strokes.current=[];redraw();},
+  }));
+  const getDpr=()=>window.devicePixelRatio||1;
+  function setup(){
+    const c=cvs.current;if(!c)return;
+    const r=c.getBoundingClientRect(),dpr=getDpr();
+    c.width=Math.round(r.width*dpr);c.height=Math.round(r.height*dpr);
+    const ctx=c.getContext("2d");ctx.setTransform(1,0,0,1,0,0);ctx.scale(dpr,dpr);redraw();
+  }
+  function redraw(){
+    const c=cvs.current;if(!c)return;
+    const ctx=c.getContext("2d"),dpr=getDpr(),w=c.width/dpr,h=c.height/dpr;
+    ctx.fillStyle="#FFFDF8";ctx.fillRect(0,0,w,h);
+    ctx.strokeStyle="#EDE9F0";ctx.lineWidth=1;
+    for(let y=28;y<h;y+=28){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
+    strokes.current.forEach(({pts})=>{
+      if(pts.length<2)return;
+      ctx.lineCap="round";ctx.lineJoin="round";ctx.strokeStyle="#221C39";ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);
+      for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);ctx.stroke();
+    });
+  }
+  useEffect(()=>{setup();const f=()=>setup();window.addEventListener("resize",f);return()=>window.removeEventListener("resize",f);},[]);
+  const pt=(e)=>{const r=cvs.current.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};};
+  function eraseAt(x,y){
+    const R=16*16,prev=strokes.current.length;
+    strokes.current=strokes.current.filter(({pts})=>!pts.some(p=>(p.x-x)**2+(p.y-y)**2<R));
+    if(strokes.current.length!==prev)redraw();
+  }
+  function down(e){
+    if(disabled)return;
+    const isSPenEraser=e.pointerType==="pen"&&(!!(e.buttons&34)||e.button===2);
+    if(isSPenEraser){eraseAt(pt(e).x,pt(e).y);return;}
+    e.preventDefault();drawing.current=true;
+    try{e.target.setPointerCapture(e.pointerId);}catch(_){}
+    strokes.current.push({pts:[pt(e)]});
+  }
+  function move(e){
+    const isSPenEraser=e.pointerType==="pen"&&(!!(e.buttons&34)||e.button===2);
+    if(isSPenEraser){e.preventDefault();if(drawing.current){strokes.current.pop();drawing.current=false;}eraseAt(pt(e).x,pt(e).y);return;}
+    if(!drawing.current||disabled)return;
+    e.preventDefault();
+    const st=strokes.current[strokes.current.length-1];if(!st)return;
+    st.pts.push(pt(e));
+    const ctx=cvs.current.getContext("2d");
+    ctx.lineCap="round";ctx.lineJoin="round";ctx.strokeStyle="#221C39";ctx.lineWidth=2;
+    if(st.pts.length>1){ctx.beginPath();ctx.moveTo(st.pts[st.pts.length-2].x,st.pts[st.pts.length-2].y);ctx.lineTo(st.pts[st.pts.length-1].x,st.pts[st.pts.length-1].y);ctx.stroke();}
+  }
+  const up=()=>{drawing.current=false;};
+  return(
+    <canvas ref={cvs} className="pad"
+      style={{height:110,cursor:disabled?"not-allowed":"crosshair",borderRadius:12}}
       onPointerDown={down} onPointerMove={move} onPointerUp={up}
       onPointerLeave={up} onPointerCancel={up}
       onContextMenu={e=>{e.preventDefault();const p=pt(e);eraseAt(p.x,p.y);}}/>
@@ -1218,11 +1285,14 @@ function Study({deck:initial,subjects}){
   const [dontknowBusy,setDontknowBusy]=useState(false);
   const [count,setCount]=useState(0);
   const [annotOpen,setAnnotOpen]=useState(false);
+  const [highlightActive,setHighlightActive]=useState(false);
   const [annotTool,setAnnotTool]=useState("hl");
+  const [annotQMode,setAnnotQMode]=useState("pen");
   const [annotQ,setAnnotQ]=useState("");
   const [annotBusy,setAnnotBusy]=useState(false);
   const [annotAnswer,setAnnotAnswer]=useState("");
   const annotPadRef=useRef(null);
+  const annotQPadRef=useRef(null);
   const [leftPage,setLeftPage]=useState(0);
   const [derivePlan,setDerivePlan]=useState(null);
   const [deriveIdx,setDeriveIdx]=useState(0);
@@ -1242,7 +1312,7 @@ function Study({deck:initial,subjects}){
   async function next(d,forceId,practical){
     d=d||deck;
     setPhase("loading");setQ(null);setEv(null);setAnswer("");setDeeper("");setDontknow("");setErrMsg("");setSubmitErr("");
-    setAnnotOpen(false);setAnnotTool("hl");setAnnotQ("");setAnnotBusy(false);setAnnotAnswer("");setLeftPage(0);
+    setAnnotOpen(false);setHighlightActive(false);setAnnotTool("hl");setAnnotQMode("pen");setAnnotQ("");setAnnotBusy(false);setAnnotAnswer("");setLeftPage(0);
     setDerivePlan(null);setDeriveIdx(0);setDeriveHistory([]);setDeriveFeedback("");setDeriveDone(false);setDeriveHintShow(false);setDeriveChecking(false);
     padRef.current?.clear();
     const c=forceId?(d.concepts||[]).find(x=>x.id===forceId)||pickConcept(d,last.current):pickConcept(d,last.current);
@@ -1372,22 +1442,24 @@ function Study({deck:initial,subjects}){
   }
 
   async function askAnnotation(ctxText){
-    const hasInk=annotPadRef.current?.hasStrokes();
-    const hasTxt=annotQ.trim().length>0;
-    if(!hasInk&&!hasTxt)return;
+    const hasHL=annotPadRef.current?.hasStrokes();
+    const hasQPen=annotQMode==="pen"&&annotQPadRef.current?.hasStrokes();
+    const hasQTxt=annotQMode==="type"&&annotQ.trim().length>0;
+    if(!hasHL&&!hasQPen&&!hasQTxt)return;
     setAnnotBusy(true);
-    const img=hasInk?annotPadRef.current.getImageBase64():null;
     const ctx=ctxText||[ev?.feedback,ev?.why,ev?.model_answer].filter(Boolean).join("\n\n");
     const userBlocks=[];
-    if(img)userBlocks.push({type:"image",source:{type:"base64",media_type:"image/png",data:img}});
+    if(hasHL){const img=annotPadRef.current.getImageBase64();userBlocks.push({type:"image",source:{type:"base64",media_type:"image/png",data:img}});}
+    if(hasQPen){const img=annotQPadRef.current.getImageBase64();userBlocks.push({type:"image",source:{type:"base64",media_type:"image/png",data:img}});}
+    const desc=(hasHL?"노란 형광펜으로 표시한 부분":"")+(hasHL&&hasQPen?" + ":"")+(hasQPen?"손글씨로 질문을 씀":"")+(hasQTxt?"타이핑 질문 있음":"");
     userBlocks.push({type:"text",text:
-      "학습자가 설명을 보다가 이해 안 되는 부분을 노란 형광펜으로 표시하고 초록 펜·텍스트로 의문을 남겼어. 표시된 내용에 대해 친절하게 바로 설명해. 메타 문장·도입 없이.\n"+
-      (hasTxt?"타이핑 질문: "+annotQ.trim()+"\n\n":"")+
-      "설명 내용:\n"+ctx
+      "학습자가 해설에서 이해 안 되는 부분에 표시하고 질문을 남겼어 ("+desc+"). 질문에 직접 답해. 메타 문장 없이.\n"+
+      (hasQTxt?"질문: "+annotQ.trim()+"\n\n":"")+
+      "해설:\n"+ctx
     });
     try{
       const r=await callAI(
-        "친절한 튜터. 첫 글자부터 바로 설명 내용. 인사·'알겠어'·메타 문장 절대 금지. 수식은 LaTeX($...$). 반말.",
+        "친절한 튜터. 첫 글자부터 바로 설명. 수식은 LaTeX($...$). 반말.",
         userBlocks,false,{maxTok:1200,cache:true});
       setAnnotAnswer(r);
     }catch(e){setAnnotAnswer("실패: "+e.message);}
@@ -1524,44 +1596,53 @@ function Study({deck:initial,subjects}){
                   {/* ── Page 1: 해설 ── */}
                   {leftPage===1&&(
                     <>
-                      {/* 해설 텍스트 + 오버레이 캔버스 */}
-                      <div style={{position:"relative",borderRadius:14,overflow:"hidden"}}>
+                      {/* 해설 텍스트 + 오버레이 하이라이트 캔버스 */}
+                      <div style={{position:"relative",borderRadius:14}}>
                         <div className="blk" style={{margin:0}}>
                           <div className="bl">이렇게 답하면 완벽</div>
                           <MathText text={ev.model_answer}/>
                         </div>
                         {deeper&&<div className="blk deeper" style={{margin:0}}><div className="bl">더 풀어서</div><MathText text={deeper}/></div>}
-                        {annotOpen&&<AnnotPad ref={annotPadRef} disabled={annotBusy} tool={annotTool}/>}
+                        {highlightActive&&<AnnotPad ref={annotPadRef} disabled={annotBusy} tool={annotTool}/>}
                       </div>
                       {!deeper&&<button className="btn gho sm" onClick={explainMore} disabled={deepBusy}>{deepBusy?"불러오는 중…":"더 풀어서 설명해줘"}</button>}
 
-                      {/* 하이라이트 도구 + 질문 */}
-                      <div className="annot-wrap">
-                        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                          <button className={"btn gho sm"+(annotOpen?" on":"")} onClick={()=>setAnnotOpen(v=>!v)}>
-                            {annotOpen?"✏️ 표시 중":"✏️ 해설에 표시하기"}
+                      {/* 의문점 섹션 */}
+                      <div className="annot-section">
+                        {/* 하이라이트 토글 */}
+                        <div className="annot-hl-bar">
+                          <button className={"btn gho sm"+(highlightActive?" on":"")}
+                            onClick={()=>{setHighlightActive(v=>!v);if(!annotOpen)setAnnotOpen(true);}}>
+                            🖊 {highlightActive?"하이라이트 중":"해설에 하이라이트"}
                           </button>
-                          {annotOpen&&<>
-                            <button className={"btn gho xs"+(annotTool==="hl"?" on":"")} onClick={()=>setAnnotTool("hl")}>🟡 형광펜</button>
-                            <button className={"btn gho xs"+(annotTool==="pen"?" on":"")} onClick={()=>setAnnotTool("pen")}>🟢 펜</button>
+                          {highlightActive&&<>
+                            <button className={"btn gho xs"+(annotTool==="hl"?" on":"")} onClick={()=>setAnnotTool("hl")}>🟡</button>
+                            <button className={"btn gho xs"+(annotTool==="pen"?" on":"")} onClick={()=>setAnnotTool("pen")}>🟢</button>
                             <button className={"btn gho xs"+(annotTool==="eraser"?" on":"")} onClick={()=>setAnnotTool("eraser")}>🧽</button>
                             <button className="btn gho xs" onClick={()=>annotPadRef.current?.clear()}>🗑️</button>
+                            <span className="note" style={{fontSize:11}}>S펜·Pencil만 인식</span>
                           </>}
                         </div>
-                        {annotOpen&&(
-                          <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                            <p className="hint" style={{margin:0,fontSize:11.5}}>S펜·Apple Pencil로 위 해설에 직접 표시해봐 · 손가락은 무시</p>
-                            <textarea value={annotQ} onChange={e=>setAnnotQ(e.target.value)} disabled={annotBusy}
-                              placeholder="타이핑으로 질문 추가 (선택)"
-                              style={{width:"100%",minHeight:52,padding:"8px 10px",borderRadius:10,
+
+                        {/* 질문 영역 */}
+                        <div className="annot-q-bar">
+                          <span className="muted" style={{fontSize:12,fontWeight:600}}>질문</span>
+                          <button className="btn gho xs" onClick={()=>setAnnotQMode(m=>m==="pen"?"type":"pen")}>
+                            {annotQMode==="pen"?"⌨ 타이핑으로":"✍ 손글씨로"}
+                          </button>
+                        </div>
+                        {annotQMode==="pen"
+                          ?<QuestionPad ref={annotQPadRef} disabled={annotBusy}/>
+                          :<textarea value={annotQ} onChange={e=>setAnnotQ(e.target.value)} disabled={annotBusy}
+                              placeholder="모르는 게 뭔지 타이핑해봐"
+                              style={{width:"100%",minHeight:64,padding:"8px 10px",borderRadius:10,
                                 border:"1.5px solid var(--line)",fontFamily:"'Noto Sans KR',sans-serif",
                                 fontSize:13,resize:"none",outline:"none",background:"var(--bg)",color:"var(--ink)"}}/>
-                            <button className="btn pri sm" onClick={askAnnotation}
-                              disabled={annotBusy||(!(annotPadRef.current?.hasStrokes())&&!annotQ.trim())}>
-                              {annotBusy?"답변 불러오는 중…":"질문하기 →"}
-                            </button>
-                          </div>
-                        )}
+                        }
+                        <button className="btn pri sm" onClick={()=>askAnnotation()}
+                          disabled={annotBusy||(!highlightActive&&!(annotQPadRef.current?.hasStrokes())&&!annotQ.trim())}>
+                          {annotBusy?"답변 불러오는 중…":"질문하기 →"}
+                        </button>
                         {annotAnswer&&<div className="annot-answer"><MathText text={annotAnswer} tag="div"/></div>}
                       </div>
                     </>
@@ -1624,38 +1705,42 @@ function Study({deck:initial,subjects}){
                 )}
                 {!dontknowBusy&&dontknow&&(
                   <>
-                    {/* 설명 텍스트 + 오버레이 캔버스 */}
-                    <div style={{position:"relative",borderRadius:14,overflow:"hidden"}}>
+                    <div style={{position:"relative",borderRadius:14}}>
                       <MathText text={dontknow} tag="div" style={{fontSize:14,lineHeight:1.9}}/>
-                      {annotOpen&&<AnnotPad ref={annotPadRef} disabled={annotBusy} tool={annotTool}/>}
+                      {highlightActive&&<AnnotPad ref={annotPadRef} disabled={annotBusy} tool={annotTool}/>}
                     </div>
-                    {/* 하이라이트 도구 + 질문 */}
-                    <div className="annot-wrap">
-                      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                        <button className={"btn gho sm"+(annotOpen?" on":"")} onClick={()=>setAnnotOpen(v=>!v)}>
-                          {annotOpen?"✏️ 표시 중":"✏️ 해설에 표시하기"}
+                    <div className="annot-section">
+                      <div className="annot-hl-bar">
+                        <button className={"btn gho sm"+(highlightActive?" on":"")}
+                          onClick={()=>setHighlightActive(v=>!v)}>
+                          🖊 {highlightActive?"하이라이트 중":"해설에 하이라이트"}
                         </button>
-                        {annotOpen&&<>
-                          <button className={"btn gho xs"+(annotTool==="hl"?" on":"")} onClick={()=>setAnnotTool("hl")}>🟡 형광펜</button>
-                          <button className={"btn gho xs"+(annotTool==="pen"?" on":"")} onClick={()=>setAnnotTool("pen")}>🟢 펜</button>
+                        {highlightActive&&<>
+                          <button className={"btn gho xs"+(annotTool==="hl"?" on":"")} onClick={()=>setAnnotTool("hl")}>🟡</button>
+                          <button className={"btn gho xs"+(annotTool==="pen"?" on":"")} onClick={()=>setAnnotTool("pen")}>🟢</button>
                           <button className={"btn gho xs"+(annotTool==="eraser"?" on":"")} onClick={()=>setAnnotTool("eraser")}>🧽</button>
                           <button className="btn gho xs" onClick={()=>annotPadRef.current?.clear()}>🗑️</button>
+                          <span className="note" style={{fontSize:11}}>S펜·Pencil만 인식</span>
                         </>}
                       </div>
-                      {annotOpen&&(
-                        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                          <p className="hint" style={{margin:0,fontSize:11.5}}>S펜·Apple Pencil로 위 설명에 직접 표시해봐 · 손가락은 무시</p>
-                          <textarea value={annotQ} onChange={e=>setAnnotQ(e.target.value)} disabled={annotBusy}
-                            placeholder="타이핑으로 질문 추가 (선택)"
-                            style={{width:"100%",minHeight:52,padding:"8px 10px",borderRadius:10,
+                      <div className="annot-q-bar">
+                        <span className="muted" style={{fontSize:12,fontWeight:600}}>질문</span>
+                        <button className="btn gho xs" onClick={()=>setAnnotQMode(m=>m==="pen"?"type":"pen")}>
+                          {annotQMode==="pen"?"⌨ 타이핑으로":"✍ 손글씨로"}
+                        </button>
+                      </div>
+                      {annotQMode==="pen"
+                        ?<QuestionPad ref={annotQPadRef} disabled={annotBusy}/>
+                        :<textarea value={annotQ} onChange={e=>setAnnotQ(e.target.value)} disabled={annotBusy}
+                            placeholder="모르는 게 뭔지 타이핑해봐"
+                            style={{width:"100%",minHeight:64,padding:"8px 10px",borderRadius:10,
                               border:"1.5px solid var(--line)",fontFamily:"'Noto Sans KR',sans-serif",
                               fontSize:13,resize:"none",outline:"none",background:"var(--bg)",color:"var(--ink)"}}/>
-                          <button className="btn pri sm" onClick={()=>askAnnotation(dontknow)}
-                            disabled={annotBusy||(!(annotPadRef.current?.hasStrokes())&&!annotQ.trim())}>
-                            {annotBusy?"답변 불러오는 중…":"질문하기 →"}
-                          </button>
-                        </div>
-                      )}
+                      }
+                      <button className="btn pri sm" onClick={()=>askAnnotation(dontknow)}
+                        disabled={annotBusy||(!highlightActive&&!(annotQPadRef.current?.hasStrokes())&&!annotQ.trim())}>
+                        {annotBusy?"답변 불러오는 중…":"질문하기 →"}
+                      </button>
                       {annotAnswer&&<div className="annot-answer"><MathText text={annotAnswer} tag="div"/></div>}
                     </div>
                   </>

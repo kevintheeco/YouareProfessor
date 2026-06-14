@@ -846,7 +846,7 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
     e.preventDefault();
     try{e.target.setPointerCapture(e.pointerId);}catch(_){}
     const p=pt(e);
-    const isSpEraser=!!(e.buttons&34);
+    const isSpEraser=(!!(e.buttons&34)||e.button===2);
     if(isSpEraser||tool==="eraser"){drawing.current=false;eraseAt(p.x,p.y);return;}
     drawing.current=true;
     strokes.current.push({pts:[p],col:tool==="hl"?"rgb(255,230,0)":"#27AE60",sz:tool==="hl"?20:2.5});
@@ -854,7 +854,7 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
   function move(e){
     if(disabled||e.pointerType!=="pen")return;
     const p=pt(e);
-    const isSpEraser=!!(e.buttons&34);
+    const isSpEraser=(!!(e.buttons&34)||e.button===2);
     if(isSpEraser||tool==="eraser"){
       e.preventDefault();
       if(drawing.current){strokes.current.pop();drawing.current=false;}
@@ -876,7 +876,8 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
         cursor:disabled?"not-allowed":tool==="eraser"?"cell":"crosshair",
         pointerEvents:disabled?"none":"auto"}}
       onPointerDown={down} onPointerMove={move} onPointerUp={up}
-      onPointerLeave={up} onPointerCancel={up}/>
+      onPointerLeave={up} onPointerCancel={up}
+      onContextMenu={e=>{e.preventDefault();const p=pt(e);eraseAt(p.x,p.y);}}/>
   );
 });
 
@@ -945,7 +946,7 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     e.preventDefault();
     try{e.target.setPointerCapture(e.pointerId);}catch(_){}
     const p=pt(e);
-    const isSpEraser=e.pointerType==="pen"&&!!(e.buttons&34);
+    const isSpEraser=e.pointerType==="pen"&&(!!(e.buttons&34)||e.button===2);
     if(isSpEraser||tool==="eraser"){
       drawing.current=false;
       eraseAt(p.x,p.y);
@@ -958,7 +959,7 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     if(disabled)return;
     if(penOnly&&e.pointerType!=="pen"){drawing.current=false;return;}
     const p=pt(e);
-    const isSpEraser=e.pointerType==="pen"&&!!(e.buttons&34);
+    const isSpEraser=e.pointerType==="pen"&&(!!(e.buttons&34)||e.button===2);
     if(isSpEraser||tool==="eraser"){
       e.preventDefault();
       if(drawing.current){
@@ -1026,7 +1027,8 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
       <canvas ref={canvasRef} className={"pad"+(tool==="eraser"?" eraser":"")}
         style={disabled?{opacity:.55,pointerEvents:"none"}:undefined}
         onPointerDown={down} onPointerMove={move} onPointerUp={up}
-        onPointerLeave={up} onPointerCancel={cancel}/>
+        onPointerLeave={up} onPointerCancel={cancel}
+        onContextMenu={e=>{e.preventDefault();const p=pt(e);eraseAt(p.x,p.y);}}/>
       {!hideOcr&&(
         <div className="pen-bottom">
           <span className="ph">S펜이나 손가락으로 써봐</span>

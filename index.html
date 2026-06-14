@@ -863,7 +863,7 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled},fwdRef){
         <span className="note">{tool==="hl"?"형광펜: 모르는 부분 표시":tool==="pen"?"초록 펜: 의문점 작성":""}</span>
       </div>
       <canvas ref={cvs} className="pad" style={{height:140,cursor:disabled?"not-allowed":"crosshair",borderRadius:12}}
-        onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={up}/>
+        onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={up} onPointerCancel={up}/>
     </div>
   );
 });
@@ -930,20 +930,34 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
   function down(e){
     if(disabled)return;
     if(penOnly&&e.pointerType!=="pen")return;
-    e.preventDefault();drawing.current=true;
+    e.preventDefault();
     try{e.target.setPointerCapture(e.pointerId);}catch(_){}
     const p=pt(e);
     const isSpEraser=e.pointerType==="pen"&&!!(e.buttons&34);
-    if(isSpEraser||tool==="eraser"){eraseAt(p.x,p.y);return;}
+    if(isSpEraser||tool==="eraser"){
+      drawing.current=false;
+      eraseAt(p.x,p.y);
+      return;
+    }
+    drawing.current=true;
     strokes.current.push({pts:[p],col:color,sz:size});
   }
   function move(e){
-    if(!drawing.current||disabled)return;
+    if(disabled)return;
     if(penOnly&&e.pointerType!=="pen"){drawing.current=false;return;}
-    e.preventDefault();
     const p=pt(e);
     const isSpEraser=e.pointerType==="pen"&&!!(e.buttons&34);
-    if(isSpEraser||tool==="eraser"){eraseAt(p.x,p.y);return;}
+    if(isSpEraser||tool==="eraser"){
+      e.preventDefault();
+      if(drawing.current){
+        strokes.current.pop();
+        drawing.current=false;
+      }
+      eraseAt(p.x,p.y);
+      return;
+    }
+    if(!drawing.current)return;
+    e.preventDefault();
     const st=strokes.current[strokes.current.length-1];
     if(!st)return;
     st.pts.push(p);
@@ -957,6 +971,7 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     if(!hasInk)setHasInk(true);
   }
   const up=()=>{drawing.current=false;};
+  const cancel=()=>{drawing.current=false;};
   function undo(){if(disabled)return;strokes.current.pop();redraw();setHasInk(strokes.current.length>0);}
   function clearPad(){strokes.current=[];redraw();setHasInk(false);setPadErr("");}
   async function recognize(){
@@ -999,7 +1014,7 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
       <canvas ref={canvasRef} className={"pad"+(tool==="eraser"?" eraser":"")}
         style={disabled?{opacity:.55,pointerEvents:"none"}:undefined}
         onPointerDown={down} onPointerMove={move} onPointerUp={up}
-        onPointerLeave={up} onPointerCancel={up}/>
+        onPointerLeave={up} onPointerCancel={cancel}/>
       {!hideOcr&&(
         <div className="pen-bottom">
           <span className="ph">S펜이나 손가락으로 써봐</span>

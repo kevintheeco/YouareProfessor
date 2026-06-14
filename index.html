@@ -197,6 +197,16 @@ a{color:var(--pri-d)}
   border-top-color:var(--pri);animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .footer{text-align:center;margin-top:36px;font-size:12px;color:var(--sub)}
+.derive-badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:6px;
+  background:#F4F2FB;color:var(--sub);cursor:pointer;margin-left:auto;flex-shrink:0;border:1.5px solid transparent;transition:all .15s}
+.derive-badge.on{background:var(--pri-s);color:var(--pri-d);border-color:var(--pri)}
+.derive-track{display:flex;flex-direction:column;gap:6px}
+.derive-step-row{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.7;padding:6px 0;border-bottom:1px solid var(--line)}
+.derive-step-row .dn{width:20px;height:20px;border-radius:50%;background:var(--pri-s);color:var(--pri-d);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
+.derive-step-row.done .dn{background:#E6F9F2;color:#1B9470}
+.derive-prompt{background:var(--pri-s);border-radius:12px;padding:10px 14px;font-size:13.5px;line-height:1.75;color:var(--pri-d);font-weight:500}
+.derive-hint{background:#FFF6E9;border:1px solid #FBE3B8;border-radius:12px;padding:10px 14px;font-size:13px;line-height:1.75;color:#8A5A12}
+.derive-fb{font-size:12.5px;color:var(--sub);padding:4px 0}
 
 @media(max-width:900px){
   .ans-layout{grid-template-columns:1fr}
@@ -291,6 +301,28 @@ function parseGrading(txt){
     why:vals.WHY||'',
     model_answer:vals.ANSWER||'',
   };
+}
+// Parse derivation plan
+function parseDerivePlan(txt){
+  const totalSteps=Math.max(2,Math.min(8,parseInt((txt.match(/STEPS\s*:\s*(\d+)/i)||[])[1])||4));
+  const start=((txt.match(/START\s*:\s*([^\n]+)/i)||[])[1]||'첫 단계를 써봐.').trim();
+  const hints=[];
+  for(let i=1;i<=totalSteps;i++){
+    hints.push(((txt.match(new RegExp('HINT'+i+'\\s*:\\s*([^\\n]+)','i'))||[])[1]||'').trim());
+  }
+  return{totalSteps,startHint:start,hints};
+}
+// Parse derivation step check
+function parseDeriveCheck(txt){
+  function field(key){
+    const sm=new RegExp('(?:^|\\n)'+key+'\\s*:[\\t ]*','i').exec(txt);
+    if(!sm)return'';
+    const from=sm.index+sm[0].length;
+    const em=/\n[A-Z]+\s*:/.exec(txt.slice(from));
+    return txt.slice(from,em?from+em.index:txt.length).trim();
+  }
+  return{correct:/yes/i.test(field('CORRECT')),done:/yes/i.test(field('DONE')),
+    feedback:field('FEEDBACK'),nextPrompt:field('NEXT')||'다음 단계를 써봐.'};
 }
 // Parse question response in plain-text structured format
 function parseQuestion(txt){
@@ -1026,6 +1058,13 @@ function Study({deck:initial,subjects}){
   const [dontknow,setDontknow]=useState("");
   const [dontknowBusy,setDontknowBusy]=useState(false);
   const [count,setCount]=useState(0);
+  const [derivePlan,setDerivePlan]=useState(null);
+  const [deriveIdx,setDeriveIdx]=useState(0);
+  const [deriveHistory,setDeriveHistory]=useState([]);
+  const [deriveFeedback,setDeriveFeedback]=useState("");
+  const [deriveChecking,setDeriveChecking]=useState(false);
+  const [deriveDone,setDeriveDone]=useState(false);
+  const [deriveHintShow,setDeriveHintShow]=useState(false);
   const last=useRef(null);
   const padRef=useRef(null);
 
@@ -1037,6 +1076,7 @@ function Study({deck:initial,subjects}){
   async function next(d,forceId,practical){
     d=d||deck;
     setPhase("loading");setQ(null);setEv(null);setAnswer("");setDeeper("");setDontknow("");setErrMsg("");setSubmitErr("");
+    setDerivePlan(null);setDeriveIdx(0);setDeriveHistory([]);setDeriveFeedback("");setDeriveDone(false);setDeriveHintShow(false);setDeriveChecking(false);
     padRef.current?.clear();
     const c=forceId?(d.concepts||[]).find(x=>x.id===forceId)||pickConcept(d,last.current):pickConcept(d,last.current);
     if(!c){setPhase("error");setErrMsg("질문할 개념이 없어.");return;}
@@ -1077,6 +1117,62 @@ function Study({deck:initial,subjects}){
     }catch(e){setPhase("answering");setSubmitErr("채점 실패: "+e.message);}
   }
 
+  function toggleDeriveMode(cid){
+    const updated={...deck,concepts:deck.concepts.map(c=>c.id===cid?{...c,deriveMode:c.deriveMode==="derive"?"memorize":"derive"}:c)};
+    persist(updated);
+  }
+
+  async function startDerive(){
+    setDerivePlan(null);setDeriveIdx(0);setDeriveHistory([]);setDeriveFeedback("");setDeriveDone(false);setDeriveHintShow(false);
+    setPhase("derive_load");
+    try{
+      const raw=await callClaude(
+        "수식 유도 튜터. 학습자가 한 단계씩 공식을 직접 유도할 수 있도록 계획을 세워. 각 단계는 한 줄~두 줄 수식 하나로 분리해. 수식은 LaTeX($...$).",
+        "개념: "+concept.name+"\n자료:\n"+studyMat.slice(0,4000)+"\n\n다음 형식으로만 출력:\nSTEPS: 단계수(3~6)\nSTART: 시작 안내 문장\nHINT1: 1단계 힌트\nHINT2: 2단계 힌트\n... (단계수만큼)",
+        false,{maxTok:700,model:CFG.qmodel});
+      setDerivePlan(parseDerivePlan(raw));
+      setPhase("derive_step");
+    }catch(e){setPhase("answering");setSubmitErr("유도 시작 실패: "+e.message);}
+  }
+
+  async function submitDeriveStep(){
+    const hasInk=padRef.current?.hasStrokes();
+    const hasTxt=answer.trim().length>0;
+    if(!hasInk&&!hasTxt){setSubmitErr("이 단계를 먼저 써봐!");return;}
+    const img=hasInk?padRef.current.getImageBase64():null;
+    setDeriveChecking(true);setDeriveHintShow(false);setSubmitErr("");
+    const userBlocks=[];
+    if(img)userBlocks.push({type:"image",source:{type:"base64",media_type:"image/png",data:img}});
+    const histTxt=deriveHistory.length?"이전 단계들:\n"+deriveHistory.map((h,i)=>(i+1)+". "+h).join("\n")+"\n\n":"";
+    userBlocks.push({type:"text",text:
+      "개념: "+concept.name+"\n현재 단계: "+(deriveIdx+1)+"/"+derivePlan.totalSteps+"\n"+histTxt+
+      "학습자 답"+(hasTxt?":\n"+answer.trim():" (손글씨 이미지)")+"\n\n"+
+      "자료:\n"+studyMat.slice(0,2500)+"\n\n"+
+      "다음 형식으로 평가:\nCORRECT: yes 또는 no\nDONE: yes 또는 no (마지막 단계가 맞을 때만)\nFEEDBACK: 1~2문장 반말\nNEXT: 다음 단계 안내 (CORRECT=yes·DONE=no일 때만)"
+    });
+    try{
+      const raw=await callClaude(
+        "수식 유도 단계 평가자. 표기가 완벽하지 않아도 수학적 방향이 맞으면 CORRECT: yes. 관대하게 평가해.",
+        userBlocks,false,{maxTok:350});
+      const res=parseDeriveCheck(raw);
+      setDeriveFeedback(res.feedback);
+      if(res.correct){
+        const newHist=[...deriveHistory,answer.trim()||("|손글씨 "+(deriveIdx+1)+"단계|")];
+        setDeriveHistory(newHist);
+        padRef.current?.clear();setAnswer("");
+        if(res.done||deriveIdx+1>=derivePlan.totalSteps){
+          setDeriveDone(true);setPhase("derive_done");
+          const uc=schedule(concept,"correct");
+          persist({...deck,concepts:deck.concepts.map(c=>c.id===concept.id?uc:c)});
+          setConcept(uc);setCount(n=>n+1);
+        }else{
+          setDeriveIdx(deriveIdx+1);setDeriveFeedback("");
+        }
+      }
+    }catch(e){setSubmitErr("평가 실패: "+e.message);}
+    setDeriveChecking(false);
+  }
+
   async function handleDontKnow(){
     const arc=LS.get("ng:dontknow")||[];
     arc.unshift({id:uid(),deckId:deck.id,conceptId:concept.id,
@@ -1113,7 +1209,8 @@ function Study({deck:initial,subjects}){
   const v=ev?.verdict;
   const vTone=v==="correct"?"mint":v==="incorrect"?"rose":"gold";
   const vLabel=v==="correct"?"오 정확해! 💯":v==="incorrect"?"이건 다시 보자 🔁":"거의 다 왔어 ✏️";
-  const isActive=phase==="answering"||phase==="grading"||phase==="result"||phase==="dontknow";
+  const isDeriving=phase==="derive_load"||phase==="derive_step"||phase==="derive_done";
+  const isActive=phase==="answering"||phase==="grading"||phase==="result"||phase==="dontknow"||isDeriving;
 
   return(
     <section className="study">
@@ -1139,6 +1236,9 @@ function Study({deck:initial,subjects}){
             <div key={c.id} className={"crow"+(concept&&c.id===concept.id?" active":"")}
               onClick={()=>{if(phase!=="loading"&&phase!=="grading"){setShowInfo(false);next(deck,c.id);}}}>
               <Meter box={c.box||1}/><span className="cn">{c.name}</span>
+              <span className={"derive-badge"+(c.deriveMode==="derive"?" on":"")}
+                title={c.deriveMode==="derive"?"유도 모드 ON — 클릭해서 끄기":"클릭하면 유도 모드로"}
+                onClick={e=>{e.stopPropagation();toggleDeriveMode(c.id);}}>∫</span>
             </div>
           ))}
         </div>
@@ -1161,8 +1261,45 @@ function Study({deck:initial,subjects}){
                 <span className="chip">{concept?.name}</span>
                 <span className="chip gho">{diffWord(concept?.box)}</span>
               </div>
-              <MathText text={q?.question} tag="h2" className="q"/>
-              {phase!=="result"&&(
+              {!isDeriving&&<MathText text={q?.question} tag="h2" className="q"/>}
+              {isDeriving&&(
+                <div style={{marginBottom:8}}>
+                  <div className="eyebrow" style={{marginBottom:6}}>증명 쉐도잉 — {concept?.name}</div>
+                  {phase==="derive_load"&&<div className="derive-prompt">유도 계획 세우는 중…</div>}
+                  {(phase==="derive_step"||phase==="derive_done")&&derivePlan&&(
+                    <div className="derive-track">
+                      {/* 완료된 단계들 */}
+                      {deriveHistory.map((h,i)=>(
+                        <div key={i} className="derive-step-row done">
+                          <div className="dn">✓</div>
+                          <MathText text={h} tag="span" style={{fontSize:13,color:"var(--ink)"}}/>
+                        </div>
+                      ))}
+                      {/* 현재 단계 프롬프트 */}
+                      {phase==="derive_step"&&(
+                        <div className="derive-prompt">
+                          <span style={{fontSize:11,fontWeight:700,display:"block",marginBottom:4,opacity:.7}}>
+                            {deriveIdx+1} / {derivePlan.totalSteps} 단계
+                          </span>
+                          <MathText text={deriveIdx===0?derivePlan.startHint:("다음 단계를 유도해봐.")} tag="span"/>
+                        </div>
+                      )}
+                      {deriveFeedback&&phase==="derive_step"&&(
+                        <div className="derive-fb"><MathText text={deriveFeedback} tag="span"/></div>
+                      )}
+                      {/* 완성 */}
+                      {phase==="derive_done"&&(
+                        <div style={{textAlign:"center",padding:"14px 0"}}>
+                          <div style={{fontSize:28}}>🎉</div>
+                          <div className="jua" style={{fontSize:16,color:"var(--pri-d)",marginTop:4}}>유도 완성!</div>
+                          <div className="muted" style={{fontSize:12,marginTop:2}}>box +1 올라갔어 👍</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!isDeriving&&phase!=="result"&&(
                 <p className="hint" style={{margin:"4px 0 0"}}>오른쪽 노트에 직접 써봐 ✍️</p>
               )}
               {phase==="result"&&ev&&(
@@ -1188,7 +1325,47 @@ function Study({deck:initial,subjects}){
             </div>
 
             {/* ── 오른쪽: 노트 캔버스 / 몰라요 강의 ── */}
-            {phase==="dontknow"?(
+            {isDeriving?(
+              <div className="card" style={{padding:14,display:"flex",flexDirection:"column",gap:10}}>
+                {phase==="derive_load"&&(
+                  <div style={{display:"flex",alignItems:"center",gap:10,padding:"20px 0"}}>
+                    <div className="spinner" style={{width:20,height:20,borderWidth:2}}/>
+                    <span className="muted" style={{fontSize:13}}>유도 계획 세우는 중…</span>
+                  </div>
+                )}
+                {phase==="derive_step"&&(
+                  <>
+                    <PenPad ref={padRef} kind="answer" hideOcr penOnlyDefault={true} disabled={deriveChecking}/>
+                    <textarea value={answer} onChange={e=>setAnswer(e.target.value)} disabled={deriveChecking}
+                      placeholder="이 단계의 식을 텍스트로 써도 돼 (선택)"
+                      style={{width:"100%",minHeight:60,padding:"8px 10px",borderRadius:10,
+                        border:"1.5px solid var(--line)",fontFamily:"'Noto Sans KR',sans-serif",
+                        fontSize:13,resize:"vertical",outline:"none",background:"var(--bg)",color:"var(--ink)"}}/>
+                    {submitErr&&<div className="err">{submitErr}</div>}
+                    {deriveHintShow&&derivePlan?.hints[deriveIdx]&&(
+                      <div className="derive-hint">
+                        <span style={{fontSize:11,fontWeight:700,display:"block",marginBottom:3}}>힌트</span>
+                        <MathText text={derivePlan.hints[deriveIdx]} tag="span"/>
+                      </div>
+                    )}
+                    <div className="row">
+                      <button className="btn pri" onClick={submitDeriveStep} disabled={deriveChecking}>
+                        {deriveChecking?"확인 중…":"이 단계 맞아? ✓"}
+                      </button>
+                      <button className="btn gho" onClick={()=>setDeriveHintShow(v=>!v)} disabled={deriveChecking}>
+                        {deriveHintShow?"힌트 숨기기":"막혔어요 💡"}
+                      </button>
+                    </div>
+                  </>
+                )}
+                {phase==="derive_done"&&(
+                  <div className="row" style={{padding:"20px 0",justifyContent:"center"}}>
+                    <button className="btn pri" onClick={()=>next(deck,concept.id)}>다시 도전 →</button>
+                    <button className="btn gho" onClick={()=>next(deck,null,true)}>넘어가요 →</button>
+                  </div>
+                )}
+              </div>
+            ):phase==="dontknow"?(
               <div className="card" style={{padding:20,display:"flex",flexDirection:"column",gap:14,overflowY:"auto",maxHeight:"calc(100vh - 280px)"}}>
                 <div className="bl" style={{fontSize:13,fontWeight:700}}>📖 이 개념 먼저 배워보자</div>
                 {dontknowBusy
@@ -1224,6 +1401,10 @@ function Study({deck:initial,subjects}){
                 )}
                 {phase!=="result"&&(
                   <>
+                    {concept?.deriveMode==="derive"&&phase==="answering"&&(
+                      <button className="btn gho sm" style={{borderColor:"var(--pri)",color:"var(--pri-d)"}}
+                        onClick={startDerive}>✏️ 직접 유도해볼게</button>
+                    )}
                     {submitErr&&<div className="err">{submitErr}</div>}
                     <div className="row">
                       <button className="btn pri" onClick={submit} disabled={phase==="grading"}>

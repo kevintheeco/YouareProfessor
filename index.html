@@ -133,7 +133,7 @@ textarea.field{resize:vertical;min-height:110px}
 .size-row input[type=range]{width:90px;accent-color:var(--pri);cursor:pointer}
 canvas.pad{width:100%;height:340px;display:block;border-radius:16px;
   border:1.5px solid var(--line);background:#FFFDF8;touch-action:none;cursor:crosshair}
-canvas.pad.eraser{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22'%3E%3Crect x='1' y='1' width='20' height='20' rx='3' fill='%23fff' stroke='%23aaa' stroke-width='1.5'/%3E%3C/svg%3E") 11 11, crosshair}
+canvas.pad.eraser{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28'%3E%3Ccircle cx='14' cy='14' r='12' fill='rgba(255,255,255,.7)' stroke='%236C5CE7' stroke-width='2'/%3E%3Cline x1='9' y1='14' x2='19' y2='14' stroke='%236C5CE7' stroke-width='1.5'/%3E%3Cline x1='14' y1='9' x2='14' y2='19' stroke='%236C5CE7' stroke-width='1.5'/%3E%3C/svg%3E") 14 14, crosshair}
 .pen-bottom{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .pen-bottom .ph{font-size:11.5px;color:var(--sub)}
 
@@ -652,41 +652,51 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     ctx.fillStyle="#FFFDF8";ctx.fillRect(0,0,w,h);
     ctx.strokeStyle="#EDE9F0";ctx.lineWidth=1;
     for(let y=32;y<h;y+=32){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
-    strokes.current.forEach(({pts,col,sz,eraser})=>{
+    strokes.current.forEach(({pts,col,sz})=>{
       if(pts.length<2)return;
       ctx.lineCap="round";ctx.lineJoin="round";
-      if(eraser){ctx.globalCompositeOperation="destination-out";}
-      else{ctx.globalCompositeOperation="source-over";ctx.strokeStyle=col;}
+      ctx.globalCompositeOperation="source-over";ctx.strokeStyle=col;
       for(let i=1;i<pts.length;i++){
         ctx.beginPath();ctx.lineWidth=sz*(0.8+(pts[i].p||.5)*0.4)*2;
         ctx.moveTo(pts[i-1].x,pts[i-1].y);ctx.lineTo(pts[i].x,pts[i].y);ctx.stroke();
       }
-      ctx.globalCompositeOperation="source-over";
     });
   }
   useEffect(()=>{setup();const f=()=>setup();window.addEventListener("resize",f);return()=>window.removeEventListener("resize",f);},[]);
 
   const pt=(e)=>{const r=canvasRef.current.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top,p:e.pressure||.5};};
+  function eraseAt(x,y){
+    const R=18*18;
+    const prev=strokes.current.length;
+    strokes.current=strokes.current.filter(({pts})=>
+      !pts.some(p=>(p.x-x)*(p.x-x)+(p.y-y)*(p.y-y)<R)
+    );
+    if(strokes.current.length!==prev){redraw();setHasInk(strokes.current.length>0);}
+  }
   function down(e){
     if(disabled)return;
     if(penOnly&&e.pointerType!=="pen")return;
     e.preventDefault();drawing.current=true;
-    strokes.current.push({pts:[pt(e)],col:color,sz:size,eraser:tool==="eraser"});
     try{e.target.setPointerCapture(e.pointerId);}catch(_){}
+    const p=pt(e);
+    if(tool==="eraser"){eraseAt(p.x,p.y);return;}
+    strokes.current.push({pts:[p],col:color,sz:size});
   }
   function move(e){
     if(!drawing.current||disabled)return;
     if(penOnly&&e.pointerType!=="pen"){drawing.current=false;return;}
     e.preventDefault();
-    const st=strokes.current[strokes.current.length-1];const p=pt(e);st.pts.push(p);
+    const p=pt(e);
+    if(tool==="eraser"){eraseAt(p.x,p.y);return;}
+    const st=strokes.current[strokes.current.length-1];
+    if(!st)return;
+    st.pts.push(p);
     const ctx=canvasRef.current.getContext("2d");
     if(st.pts.length>1){
       ctx.lineCap="round";ctx.lineJoin="round";
-      if(st.eraser){ctx.globalCompositeOperation="destination-out";}
-      else{ctx.globalCompositeOperation="source-over";ctx.strokeStyle=st.col;}
+      ctx.globalCompositeOperation="source-over";ctx.strokeStyle=st.col;
       ctx.beginPath();ctx.lineWidth=st.sz*(0.8+(p.p||.5)*0.4)*2;
       ctx.moveTo(st.pts[st.pts.length-2].x,st.pts[st.pts.length-2].y);ctx.lineTo(p.x,p.y);ctx.stroke();
-      ctx.globalCompositeOperation="source-over";
     }
     if(!hasInk)setHasInk(true);
   }

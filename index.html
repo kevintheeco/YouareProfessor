@@ -283,11 +283,14 @@ async function callClaude(system,userContent,wantJson,opts={}){
 }
 
 async function transcribeFile(base64,mediaType,kind){
-  const hint=kind==="answer"?"이건 학습자가 손으로 쓴 답안이야.":"이건 학습자의 공부 노트야.";
+  const sys="너는 한국어 손글씨 OCR 전문가야. S펜·디지털 펜으로 쓴 한국어 학습 답안·노트 인식이 전문이야. 규칙: ①획이 불명확해도 문맥·형태로 최선 추론, 절대 포기하지 않음 ②수식은 LaTeX($...$) 형식 ③한자·영어 약어·그리스 문자도 그대로 출력 ④설명·주석 없이 인식 텍스트만 출력";
+  const hint=kind==="answer"
+    ?"이건 학습자가 S펜으로 쓴 한국어 답안이야. 수식·한자·영어 약어가 섞일 수 있어. 빠짐없이 읽어줘."
+    :"이건 학습자의 한국어 공부 노트야. 제목·소제목·수식·목록이 섞여 있을 수 있어. 빠짐없이 읽어줘.";
   const fileBlock={type:"image",source:{type:"base64",media_type:mediaType||"image/png",data:base64}};
-  return await callClaude(
-    "너는 손글씨 OCR 도우미야.",
-    [fileBlock,{type:"text",text:hint+" 내용을 한국어로 정확히 옮겨줘. 수식은 ^ _ 기호로 풀어 써. 텍스트만 출력."}],false);
+  return await callClaude(sys,
+    [fileBlock,{type:"text",text:hint+" 애매한 글자는 가장 가능성 높은 글자로 판단해. 텍스트만 출력."}],
+    false,{maxTok:1500,model:"claude-sonnet-4-6"});
 }
 
 // PDF는 텍스트 변환 없이 직접 분석 — summary+concepts 한 번에 추출

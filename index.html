@@ -487,7 +487,7 @@ const toB64=(file)=>new Promise((res,rej)=>{
 let _uidSeq=0;
 const uid=()=>Date.now().toString(36)+(_uidSeq++).toString(36).padStart(3,'0')+Math.random().toString(36).slice(2,5);
 const DAY=864e5;
-const INTERVALS=[0,0,1,3,7,16];
+const INTERVALS=[0,0,1,2,4,7];
 
 function schedule(c,verdict){
   let box=c.box||1;

@@ -242,9 +242,23 @@ const { useState, useEffect, useRef, useCallback } = React;
 /* ── 저장소 ── */
 const LS = {
   get(k){try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch{return null}},
-  set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch{return false}},
+  set(k,v){
+    try{localStorage.setItem(k,JSON.stringify(v));return true;}
+    catch(e){console.error("[LS] 저장 실패:",k,e);return false;}
+  },
   del(k){try{localStorage.removeItem(k)}catch{}},
 };
+function getStorageSize(){
+  let t=0;
+  try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith("ng:"))t+=(k.length+(localStorage.getItem(k)||"").length)*2;}}
+  catch{}
+  return t;
+}
+function formatSize(b){
+  if(b<1024)return b+"B";
+  if(b<1048576)return(b/1024).toFixed(1)+"KB";
+  return(b/1048576).toFixed(2)+"MB";
+}
 const DECKS_KEY="ng:decks";
 const SUBJS_KEY="ng:subjects";
 const dk=(id)=>"ng:deck:"+id;
@@ -278,7 +292,7 @@ const QMODELS=[
 ];
 
 // opts: { cache:bool, maxTok:number, model:string }
-async function callGemini(system,userContent,wantJson,opts={}){
+async function callGemini(system,userContent,wantJson,opts={},signal){
   if(!CFG.geminiKey)throw new Error("Gemini API 키가 없어 — 설정에서 추가해줘");
   const model=(opts.model||"gemini-2.0-flash");
   const maxTok=opts.maxTok||(wantJson?2048:1024);
@@ -296,7 +310,7 @@ async function callGemini(system,userContent,wantJson,opts={}){
   };
   const res=await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CFG.geminiKey}`,
-    {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}
+    {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal}
   );
   if(!res.ok){let m="Gemini "+res.status;try{const j=await res.json();m=j.error?.message||m}catch{}throw new Error(m)}
   const data=await res.json();
@@ -307,10 +321,10 @@ async function callGemini(system,userContent,wantJson,opts={}){
   if(s===-1||e===-1||e<=s)throw new Error("JSON 응답 없음");
   return JSON.parse(fixJson(clean.slice(s,e+1)));
 }
-function callAI(system,userContent,wantJson,opts={}){
+function callAI(system,userContent,wantJson,opts={},signal){
   const m=opts.model||CFG.model;
-  if(m.startsWith("gemini"))return callGemini(system,userContent,wantJson,opts);
-  return callClaude(system,userContent,wantJson,opts);
+  if(m.startsWith("gemini"))return callGemini(system,userContent,wantJson,opts,signal);
+  return callClaude(system,userContent,wantJson,opts,signal);
 }
 function fixJson(str){
   let out="",inStr=false,i=0;
@@ -330,9 +344,9 @@ function fixJson(str){
   }
   return out;
 }
-// Parse grading response in plain-text structured format (no JSON → no escape issues)
+// Parse gap-analysis grading response
 function parseGrading(txt){
-  const KEYS=['VERDICT','SCORE','FEEDBACK','WHY','ANSWER'];
+  const KEYS=['ESSENCE','GOT_IT','GAP','GAP_TYPE','DEPTH','NEXT','VERDICT','ANSWER'];
   const vals={};
   for(let i=0;i<KEYS.length;i++){
     const key=KEYS[i],next=KEYS[i+1];
@@ -344,12 +358,22 @@ function parseGrading(txt){
     vals[key]=txt.slice(from,to).trim();
   }
   const v=(vals.VERDICT||'').toLowerCase().replace(/[^a-z]/g,'');
+  const DEPTH_LEVELS=['암기 수준','이해 수준','설명가능 수준','응용가능 수준'];
+  const rawDepth=vals.DEPTH||'';
+  const depth=DEPTH_LEVELS.find(l=>rawDepth.includes(l.split(' ')[0]))||rawDepth;
+  const GAP_TYPES=['개념누락','이해얕음','핵심비껴감','표현부족','갭없음'];
+  const rawGapType=vals.GAP_TYPE||'';
+  const gap_type=GAP_TYPES.find(t=>rawGapType.includes(t))||rawGapType;
   return{
     verdict:['correct','partial','incorrect'].includes(v)?v:'partial',
-    score:Math.min(100,Math.max(0,parseInt(vals.SCORE)||50)),
-    feedback:vals.FEEDBACK||'',
-    why:vals.WHY||'',
+    essence:vals.ESSENCE||'',
+    got_it:vals.GOT_IT||'',
+    gap:vals.GAP||'',
+    gap_type,
+    depth,
+    next:vals.NEXT||'',
     model_answer:vals.ANSWER||'',
+    feedback:vals.GOT_IT||'',
   };
 }
 // Parse derivation plan
@@ -375,8 +399,17 @@ function parseDeriveCheck(txt){
     feedback:field('FEEDBACK'),nextPrompt:field('NEXT')||'다음 단계를 써봐.'};
 }
 // Parse question response in plain-text structured format
+function parseOcrCheck(txt){
+  const tm=/TEXT\s*:\s*([\s\S]*?)(?=\nUNCLEAR\s*:|$)/i.exec(txt);
+  const um=/UNCLEAR\s*:\s*([\s\S]+)/i.exec(txt);
+  const text=(tm?.[1]||"").trim();
+  const us=(um?.[1]||"").trim();
+  const unclear=(!us||/없음/i.test(us))?[]:
+    us.split("|").map(s=>{const p=s.trim().split(",").map(Number);return p.length===4&&p.every(n=>!isNaN(n))?{x:p[0],y:p[1],w:p[2],h:p[3]}:null;}).filter(Boolean);
+  return{text,unclear};
+}
 function parseQuestion(txt){
-  const KEYS=['QUESTION','POINTS'];
+  const KEYS=['QTYPE','QUESTION','POINTS'];
   const vals={};
   for(let i=0;i<KEYS.length;i++){
     const key=KEYS[i],next=KEYS[i+1];
@@ -387,12 +420,15 @@ function parseQuestion(txt){
     if(next){const em=new RegExp('\\n'+next+'\\s*:','i').exec(txt.slice(from));if(em)to=from+em.index;}
     vals[key]=txt.slice(from,to).trim();
   }
+  const rawQt=(vals.QTYPE||'').toLowerCase();
+  const qtype=['recall','understand','apply'].find(t=>rawQt.includes(t))||'understand';
   return{
+    qtype,
     question:vals.QUESTION||'',
     key_points:(vals.POINTS||'').split('|').map(s=>s.trim()).filter(Boolean),
   };
 }
-async function callClaude(system,userContent,wantJson,opts={}){
+async function callClaude(system,userContent,wantJson,opts={},signal){
   if(!CFG.key)throw new Error("NO_KEY");
   const maxTok=opts.maxTok||(wantJson?2048:1024);
   const hdrs={"content-type":"application/json","x-api-key":CFG.key,
@@ -402,7 +438,7 @@ async function callClaude(system,userContent,wantJson,opts={}){
     ?[{type:"text",text:system,cache_control:{type:"ephemeral"}}]
     :system;
   const res=await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",headers:hdrs,
+    method:"POST",headers:hdrs,signal,
     body:JSON.stringify({model:opts.model||CFG.model,max_tokens:maxTok,system:sysPay,
       messages:[{role:"user",content:userContent}]}),
   });
@@ -429,12 +465,17 @@ async function transcribeFile(base64,mediaType,kind){
 
 // PDF는 텍스트 변환 없이 직접 분석 — summary+concepts 한 번에 추출
 async function processPdf(base64){
-  const r=await callClaude(
-    "너는 학습 자료 분석 전문가야. PDF를 읽고 학습에 필요한 핵심 내용을 추출해.",
-    [{type:"document",source:{type:"base64",media_type:"application/pdf",data:base64}},
-     {type:"text",text:"이 PDF가 무엇을 가르치려는지 핵심 주제와 목적을 먼저 파악해. 그런 다음 그 목적에 맞는 핵심 개념을 추출해. 단순히 등장하는 단어가 아니라, 이 자료의 학습 목표를 대표하는 개념이어야 해. JSON만: {\"summary\":\"핵심 개념·공식·예시 압축 요약 (3000자 이내, 수식은 LaTeX 형식 그대로 유지)\",\"concepts\":[\"이 자료의 핵심 학습 목표에 해당하는 개념 10~20개 (짧은 명사구, 자료의 주제를 반영\"]}"}],
-    true,{maxTok:3000});
-  return r;
+  try{
+    const r=await callClaude(
+      "너는 학습 자료 분석 전문가야. PDF를 읽고 학습에 필요한 핵심 내용을 추출해.",
+      [{type:"document",source:{type:"base64",media_type:"application/pdf",data:base64}},
+       {type:"text",text:"이 PDF가 무엇을 가르치려는지 핵심 주제와 목적을 먼저 파악해. 그런 다음 그 목적에 맞는 핵심 개념을 추출해. 단순히 등장하는 단어가 아니라, 이 자료의 학습 목표를 대표하는 개념이어야 해. JSON만: {\"summary\":\"핵심 개념·공식·예시 압축 요약 (3000자 이내, 수식은 LaTeX 형식 그대로 유지)\",\"concepts\":[\"이 자료의 핵심 학습 목표에 해당하는 개념 10~20개 (짧은 명사구, 자료의 주제를 반영\"]}"}],
+      true,{maxTok:3000});
+    return r;
+  }catch(e){
+    console.warn("[processPdf] 실패:",e.message);
+    return null;
+  }
 }
 
 /* 파일 → base64 */
@@ -442,14 +483,9 @@ const toB64=(file)=>new Promise((res,rej)=>{
   const r=new FileReader();r.onload=()=>res(String(r.result).split(",")[1]);r.onerror=rej;r.readAsDataURL(file);
 });
 
-/* PDF 첫 페이지 → base64 PNG via canvas */
-async function pdfPageToBase64(file){
-  const ab=await file.arrayBuffer();
-  const b64=btoa(String.fromCharCode(...new Uint8Array(ab)));
-  return {base64:b64,mediaType:"application/pdf"};
-}
 
-const uid=()=>Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-3);
+let _uidSeq=0;
+const uid=()=>Date.now().toString(36)+(_uidSeq++).toString(36).padStart(3,'0')+Math.random().toString(36).slice(2,5);
 const DAY=864e5;
 const INTERVALS=[0,0,1,3,7,16];
 
@@ -638,9 +674,21 @@ function Onboard({onDone}){
   );
 }
 function Settings({onDone}){
+  const [storSize,setStorSize]=useState(()=>getStorageSize());
+  const MAX=5*1024*1024;
+  const pct=Math.min(100,Math.round(storSize/MAX*100));
+  const barColor=pct>=90?"var(--rose)":pct>=70?"var(--gold)":"var(--mint)";
   return(
     <div className="card panel">
       <div className="eyebrow">설정</div>
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5,color:"var(--sub)",marginBottom:6}}>
+          <span>저장 공간</span>
+          <span style={{fontWeight:700,color:pct>=70?barColor:"var(--sub)"}}>{formatSize(storSize)} / 5MB ({pct}%)</span>
+        </div>
+        <div className="bar"><i style={{width:pct+"%",background:barColor}}/></div>
+        {pct>=80&&<p className="err" style={{fontSize:12.5,marginTop:8}}>⚠️ 저장 공간이 부족해. 오래된 자료를 삭제해줘.</p>}
+      </div>
       <KeyForm onSaved={onDone} cta="저장" showCancel onCancel={onDone}/>
     </div>
   );
@@ -697,12 +745,14 @@ function KeyForm({onSaved,cta,showCancel,onCancel}){
 function Home({decks,subjects,onAdd,onOpen,onChanged}){
   const [det,setDet]=useState({});
   useEffect(()=>{
-    const o={};decks.forEach(d=>{const f=LS.get(dk(d.id));if(f)o[d.id]=deckSummary(f);});setDet(o);
+    const o={};decks.forEach(d=>{const f=LS.get(dk(d.id));if(f)o[d.id]={...deckSummary(f),createdAt:f.createdAt};});setDet(o);
   },[decks]);
 
   function del(id,name){
-    if(!confirm('"'+name+'" 삭제할까?'))return;
-    LS.del(dk(id));LS.set(DECKS_KEY,(LS.get(DECKS_KEY)||[]).filter(x=>x.id!==id));onChanged();
+    if(!confirm('"'+name+'" 자료와 학습 기록을 완전히 삭제할까?\n되돌릴 수 없어.'))return;
+    LS.del(dk(id));
+    LS.set(DECKS_KEY,(LS.get(DECKS_KEY)||[]).filter(x=>x.id!==id));
+    onChanged();
   }
   const getSubj=(id)=>subjects.find(s=>s.id===id);
 
@@ -726,7 +776,10 @@ function Home({decks,subjects,onAdd,onOpen,onChanged}){
             const s=det[d.id];const subj=getSubj(d.subjId);
             return(
               <article key={d.id} className="card deck">
-                {subj&&<div className="subj-badge" style={{background:subj.color+"22",color:subj.color}}>{subj.name}</div>}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+                  {subj&&<div className="subj-badge" style={{background:subj.color+"22",color:subj.color}}>{subj.name}</div>}
+                  {s?.createdAt&&<span style={{fontSize:11,color:"var(--sub)",flexShrink:0,marginTop:2}}>{new Date(s.createdAt).toLocaleDateString("ko-KR",{year:"numeric",month:"short",day:"numeric"})}</span>}
+                </div>
                 <div className="nm">{d.name}</div>
                 {s?(<>
                   <div className="stats">
@@ -852,6 +905,7 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
     const isSpEraser=(!!(e.buttons&34)||e.button===2);
     if(isSpEraser||tool==="eraser"){drawing.current=false;eraseAt(p.x,p.y);return;}
     drawing.current=true;
+    if(strokes.current.length>=500)strokes.current.shift();
     strokes.current.push({pts:[p],col:tool==="hl"?"rgb(255,230,0)":"#27AE60",sz:tool==="hl"?20:2.5});
   }
   function move(e){
@@ -875,7 +929,7 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
   return(
     <canvas ref={cvs}
       style={{position:"absolute",top:0,left:0,
-        mixBlendMode:"multiply",touchAction:"none",zIndex:5,
+        mixBlendMode:"multiply",touchAction:"pan-x pan-y",zIndex:5,
         cursor:disabled?"not-allowed":tool==="eraser"?"cell":"crosshair",
         pointerEvents:disabled?"none":"auto"}}
       onPointerDown={down} onPointerMove={move} onPointerUp={up}
@@ -885,12 +939,13 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
 });
 
 /* ── 질문 손글씨 패드 (단독, 배경 있음) ── */
-const QuestionPad=React.forwardRef(function QuestionPad({disabled},fwdRef){
+const QuestionPad=React.forwardRef(function QuestionPad({disabled,tool="pen"},fwdRef){
   const cvs=useRef(null);const strokes=useRef([]);const drawing=useRef(false);
   React.useImperativeHandle(fwdRef,()=>({
     getImageBase64:()=>cvs.current?.toDataURL("image/png").split(",")[1]||null,
     hasStrokes:()=>strokes.current.length>0,
     clear:()=>{strokes.current=[];redraw();},
+    undo:()=>{if(strokes.current.length>0){strokes.current.pop();redraw();}},
   }));
   const getDpr=()=>window.devicePixelRatio||1;
   function setup(){
@@ -921,15 +976,20 @@ const QuestionPad=React.forwardRef(function QuestionPad({disabled},fwdRef){
   }
   function down(e){
     if(disabled)return;
-    const isSPenEraser=e.pointerType==="pen"&&(!!(e.buttons&34)||e.button===2);
-    if(isSPenEraser){eraseAt(pt(e).x,pt(e).y);return;}
+    if(e.pointerType!=="pen")return;
+    const isSPenEraser=(!!(e.buttons&34)||e.button===2);
+    if(isSPenEraser||tool==="eraser"){eraseAt(pt(e).x,pt(e).y);return;}
     e.preventDefault();drawing.current=true;
     try{e.target.setPointerCapture(e.pointerId);}catch(_){}
+    if(strokes.current.length>=500)strokes.current.shift();
     strokes.current.push({pts:[pt(e)]});
   }
   function move(e){
-    const isSPenEraser=e.pointerType==="pen"&&(!!(e.buttons&34)||e.button===2);
-    if(isSPenEraser){e.preventDefault();if(drawing.current){strokes.current.pop();drawing.current=false;}eraseAt(pt(e).x,pt(e).y);return;}
+    if(e.pointerType!=="pen"){drawing.current=false;return;}
+    const isSPenEraser=(!!(e.buttons&34)||e.button===2);
+    if(isSPenEraser||tool==="eraser"){
+      e.preventDefault();if(drawing.current){strokes.current.pop();drawing.current=false;}eraseAt(pt(e).x,pt(e).y);return;
+    }
     if(!drawing.current||disabled)return;
     e.preventDefault();
     const st=strokes.current[strokes.current.length-1];if(!st)return;
@@ -941,7 +1001,7 @@ const QuestionPad=React.forwardRef(function QuestionPad({disabled},fwdRef){
   const up=()=>{drawing.current=false;};
   return(
     <canvas ref={cvs} className="pad"
-      style={{height:110,cursor:disabled?"not-allowed":"crosshair",borderRadius:12}}
+      style={{height:110,cursor:disabled?"not-allowed":tool==="eraser"?"cell":"crosshair",borderRadius:12}}
       onPointerDown={down} onPointerMove={move} onPointerUp={up}
       onPointerLeave={up} onPointerCancel={up}
       onContextMenu={e=>{e.preventDefault();const p=pt(e);eraseAt(p.x,p.y);}}/>
@@ -968,7 +1028,8 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     getImageBase64:()=>canvasRef.current?canvasRef.current.toDataURL("image/png").split(",")[1]:null,
     hasStrokes:()=>strokes.current.length>0,
     clear:()=>{strokes.current=[];redraw();setHasInk(false);setPadErr("");},
-    forceColor:(c)=>{setColor(c);setTool("pen");}
+    forceColor:(c)=>{setColor(c);setTool("pen");},
+    getSize:()=>canvasRef.current?{w:canvasRef.current.width,h:canvasRef.current.height}:{w:800,h:680},
   }));
 
   const getDpr=()=>window.devicePixelRatio||1;
@@ -1020,6 +1081,7 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
       return;
     }
     drawing.current=true;
+    if(strokes.current.length>=500)strokes.current.shift();
     strokes.current.push({pts:[p],col:color,sz:size});
   }
   function move(e){
@@ -1139,6 +1201,7 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
   const [files,setFiles]=useState([]);
   const [busy,setBusy]=useState(false);
   const [busyMsg,setBusyMsg]=useState("");
+  const [progress,setProgress]=useState(0);
   const [err,setErr]=useState("");
   const [pen,setPen]=useState(false);
   const [newSubj,setNewSubj]=useState("");
@@ -1153,26 +1216,60 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
   }
 
   async function save(){
-    setBusy(true);setErr("");setBusyMsg("준비 중…");
+    if(!CFG.key&&!CFG.geminiKey){
+      setErr("API 키가 없어. 설정에서 Claude 또는 Gemini 키를 먼저 입력해줘.");return;
+    }
+    if(!material.trim()&&files.length===0){
+      setErr("자료를 입력하거나 파일을 첨부해줘.");return;
+    }
 
-    // ── 파일 처리: PDF는 직접 분석, 이미지는 OCR ──
+    setBusy(true);setErr("");setProgress(0);setBusyMsg("준비 중…");
+
+    // 글로벌 가짜 진행률 타이머: 0→70 빠르게, 70→90 느리게, 90에서 멈춤
+    let _prog=0;
+    const fakeTimer=setInterval(()=>{
+      if(_prog<70){_prog=Math.min(70,_prog+1.5);}
+      else if(_prog<90){_prog=Math.min(90,_prog+0.3);}
+      setProgress(Math.round(_prog));
+    },60);
+
+    const fail=(msg)=>{
+      clearInterval(fakeTimer);
+      setProgress(0);setBusy(false);setBusyMsg("");
+      setErr(msg);
+    };
+    const done=()=>{
+      clearInterval(fakeTimer);
+      setProgress(100);
+      setBusyMsg("완료! 🎉 이제 공부 시작하자");
+      setTimeout(()=>{setBusy(false);setBusyMsg("");onDone();},800);
+    };
+
+    // ── 파일 처리 ──
     const pdfResults=[];
     let imageText="";
-    for(const f of files){
+    let fileErrMsg="";
+    for(let i=0;i<files.length;i++){
+      const f=files[i];
       const isPdf=f.type==="application/pdf";
-      if(isPdf&&f.size>30*1024*1024){setErr("PDF가 너무 커. 30MB 이하 파일만 지원해.");setBusy(false);return;}
+      if(isPdf&&f.size>30*1024*1024){fail("PDF가 너무 커. 30MB 이하 파일만 지원해.");return;}
       try{
+        setBusyMsg("파일 읽는 중… ("+f.name+")");
         const b64=await toB64(f);
         if(isPdf){
-          setBusyMsg("PDF 분석 중… ("+f.name+")");
+          setBusyMsg("PDF 분석 중… "+f.name+" (AI가 읽는 중, 1~2분 걸릴 수 있어)");
           const r=await processPdf(b64);
-          if(r)pdfResults.push(r);
+          if(r){pdfResults.push(r);}
+          else{fileErrMsg+=f.name+": PDF 분석 실패 (Claude 키 확인 필요). ";}
         }else{
           setBusyMsg("이미지 읽는 중… ("+f.name+")");
           const t=await transcribeFile(b64,f.type||"image/jpeg","note");
           imageText+=(t||"")+"\n";
         }
-      }catch(e){console.warn("파일 처리 실패",f.name,e.message);}
+      }catch(e){
+        fileErrMsg+=f.name+": "+e.message+". ";
+        console.warn("파일 처리 실패",f.name,e);
+      }
     }
 
     // ── 자료 합치기 ──
@@ -1180,37 +1277,53 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
     const fullMaterial=[material,imageText,pdfSummaryText].map(s=>s.trim()).filter(Boolean).join("\n").trim();
     const finalName=name.trim()||"새 자료";
 
-    // ── 개념 추출: PDF가 이미 개념 제공하면 우선 사용 ──
+    if(!fullMaterial){
+      fail("자료 내용을 읽지 못했어."+(fileErrMsg?" 오류: "+fileErrMsg:"")+" 텍스트로 직접 입력하거나 Claude API 키를 확인해줘.");return;
+    }
+    if(fileErrMsg)setErr("⚠️ 일부 파일 오류: "+fileErrMsg+"나머지 자료로 계속 진행할게.");
+
+    // ── 개념 추출 ──
     setBusyMsg("핵심 개념 정리 중…");
     let concepts=pdfResults.flatMap(r=>Array.isArray(r.concepts)?r.concepts:[]);
-    if(fullMaterial&&concepts.length<5){
+    if(concepts.length<5){
       try{
-        const r=await callClaude(
+        const r=await callAI(
           "너는 학습 자료 분석 전문가야. 자료가 무엇을 가르치려는지 핵심 주제와 목적을 먼저 파악해. 그 목적에 맞는 핵심 개념 8~15개를 짧은 명사구로 뽑아. 단순히 등장하는 단어가 아니라 이 자료의 학습 목표를 대표하는 개념이어야 해. JSON만: {\"concepts\":[\"...\"]}",
           "자료:\n\n"+fullMaterial.slice(0,12000),true,{maxTok:512});
         const extra=Array.isArray(r.concepts)?r.concepts:[];
         concepts=[...concepts,...extra.filter(c=>!concepts.includes(c))];
-      }catch(e){setErr("개념 뽑기 실패: "+e.message);setBusy(false);return;}
+      }catch(e){
+        fail("개념 추출 실패: "+e.message+" — API 키와 인터넷 연결을 확인해줘.");return;
+      }
     }
     if(!concepts.length)concepts=["전체 자료"];
 
-    // ── 요약: PDF 분석 결과를 그대로 사용, 없으면 텍스트에서 생성 ──
+    // ── 요약 ──
     let summary=pdfSummaryText;
     if(!summary&&fullMaterial.length>2000){
-      setBusyMsg("자료 요약 중…");
+      setBusyMsg("거의 다 됐어… 마무리 중");
       try{
-        summary=await callClaude(
+        summary=await callAI(
           "너는 학습 자료 요약 전문가야. 핵심 개념·공식·예시를 빠짐없이 압축해. 수식·기호 원문 그대로. 텍스트만 출력.",
           "자료:\n"+fullMaterial.slice(0,20000),false,{maxTok:900});
-      }catch(e){console.warn("요약 생성 실패",e);}
+      }catch(e){console.warn("요약 생성 실패 (건너뜀):",e.message);}
     }
 
+    // ── 저장 ──
     const id=uid();
-    const deck={id,name:finalName,subjId,material:fullMaterial,summary,createdAt:Date.now(),
+    const materialToStore=summary?fullMaterial.slice(0,5000):fullMaterial.slice(0,12000);
+    const deck={id,name:finalName,subjId,material:materialToStore,summary,createdAt:Date.now(),
       concepts:concepts.map(nm=>({id:uid(),name:String(nm).slice(0,80),box:1,dueAt:0,reps:0,lapses:0}))};
-    LS.set(dk(id),deck);
-    LS.set(DECKS_KEY,[{id,name:deck.name,subjId},...(LS.get(DECKS_KEY)||[])]);
-    setBusy(false);setBusyMsg("");onDone();
+
+    const usedBytes=getStorageSize();
+    if(usedBytes>4.5*1024*1024){
+      fail("저장 공간이 부족해 ("+formatSize(usedBytes)+" / 5MB). 오래된 자료를 먼저 삭제해줘.");return;
+    }
+    if(!LS.set(dk(id),deck)){fail("저장 실패: 저장 공간이 꽉 찼어.");return;}
+    if(!LS.set(DECKS_KEY,[{id,name:deck.name,subjId},...(LS.get(DECKS_KEY)||[])])){
+      LS.del(dk(id));fail("저장 실패: 저장 공간이 꽉 찼어.");return;
+    }
+    done();
   }
 
   const selSubj=subjects.find(s=>s.id===subjId);
@@ -1260,12 +1373,53 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
       {pen&&<PenPad kind="note" onText={append}/>}
 
       {err&&<div className="err">{err}</div>}
+      {busy&&(
+        <div style={{position:"sticky",bottom:0,zIndex:10,background:"var(--card)",
+          border:"2px solid var(--pri)",borderRadius:14,padding:"14px 16px",
+          boxShadow:"0 4px 24px rgba(108,92,231,.18)",display:"flex",flexDirection:"column",gap:8}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:13,fontWeight:600,color:progress===100?"var(--mint)":"var(--pri-d)"}}>{busyMsg||"처리 중…"}</span>
+            <span style={{fontSize:15,fontWeight:700,color:progress===100?"var(--mint)":"var(--pri-d)"}}>{progress}%</span>
+          </div>
+          <div style={{height:12,borderRadius:8,background:"#F0EDFA",overflow:"hidden"}}>
+            <div style={{height:"100%",borderRadius:8,
+              background:progress===100?"var(--mint)":"linear-gradient(90deg,var(--pri),var(--mint))",
+              width:progress+"%",transition:"width .5s ease"}}/>
+          </div>
+          {progress===100
+            ?<span style={{fontSize:12,color:"var(--mint)",fontWeight:600,textAlign:"center"}}>저장 완료! 이제 공부 시작하자 🎉</span>
+            :<span style={{fontSize:11.5,color:"var(--sub)"}}>페이지를 닫지 마. 분석이 끝나면 자동으로 저장돼.</span>
+          }
+        </div>
+      )}
       <div className="row">
-        <button className="btn pri" onClick={save} disabled={busy}>{busy?(busyMsg||"처리 중…"):"이거 외우자! 🎓"}</button>
+        <button className="btn pri" onClick={save} disabled={busy}>{busy?"분석 중…":"이제 공부하자! 📖"}</button>
         <button className="btn gho" onClick={onCancel} disabled={busy}>취소</button>
       </div>
       <p className="hint">PDF는 최대 50페이지·30MB까지 지원. 이미지·손글씨 노트도 첨부 가능.</p>
     </section>
+  );
+}
+
+/* ── 이해 깊이 게이지 ── */
+function DepthGauge({depth}){
+  const LEVELS=["암기","이해","설명가능","응용가능"];
+  const idx=LEVELS.findIndex(l=>depth&&depth.startsWith(l));
+  if(idx<0||!depth)return null;
+  return(
+    <div style={{padding:"8px 12px",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:10}}>
+      <div style={{fontSize:10,fontWeight:700,color:"var(--sub)",letterSpacing:".5px",marginBottom:6}}>이해 깊이</div>
+      <div style={{display:"flex",gap:4}}>
+        {LEVELS.map((l,i)=>(
+          <div key={l} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+            <div style={{width:"100%",height:7,borderRadius:4,
+              background:i<=idx?(i===0?"#A0A0D0":i===1?"#7B83D6":i===2?"#6C5CE7":"#4A3FC7"):"#E0E0F0"}}/>
+            <span style={{fontSize:9.5,lineHeight:1.3,textAlign:"center",
+              color:i===idx?"#6C5CE7":"var(--sub)",fontWeight:i===idx?700:400}}>{l}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1288,6 +1442,7 @@ function Study({deck:initial,subjects}){
   const [highlightActive,setHighlightActive]=useState(false);
   const [annotTool,setAnnotTool]=useState("hl");
   const [annotQMode,setAnnotQMode]=useState("pen");
+  const [annotQTool,setAnnotQTool]=useState("pen");
   const [annotQ,setAnnotQ]=useState("");
   const [annotBusy,setAnnotBusy]=useState(false);
   const [annotAnswer,setAnnotAnswer]=useState("");
@@ -1301,65 +1456,214 @@ function Study({deck:initial,subjects}){
   const [deriveChecking,setDeriveChecking]=useState(false);
   const [deriveDone,setDeriveDone]=useState(false);
   const [deriveHintShow,setDeriveHintShow]=useState(false);
+  const [followupQ,setFollowupQ]=useState("");
+  const [followupCount,setFollowupCount]=useState(0);
+  const [followupHistory,setFollowupHistory]=useState([]);
+  const [followupBusy,setFollowupBusy]=useState(false);
+  const [followupEv,setFollowupEv]=useState(null);
+  const [followupSuccess,setFollowupSuccess]=useState(false);
+  const [ocrHighlights,setOcrHighlights]=useState([]);
+  const [ocrImg,setOcrImg]=useState(null);
+  const [ocrImgSize,setOcrImgSize]=useState({w:800,h:680});
   const last=useRef(null);
   const padRef=useRef(null);
+  const ocrImgRef=useRef(null);
+  const deckRef=useRef(deck);
+  const submitting=useRef(false);
+  const followupSubmitting=useRef(false);
+  const genId=useRef(0);
+  const abortRef=useRef(null);
 
-  function persist(d){setDeck(d);LS.set(dk(d.id),d);}
+  function persist(d){
+    deckRef.current=d;
+    setDeck(d);
+    if(!LS.set(dk(d.id),d)){
+      setSubmitErr("⚠️ 학습 기록 저장 실패: 저장 공간 부족. 설정에서 오래된 자료를 삭제해줘.");
+    }
+  }
 
   // 세션 전체에서 캐시 공유: summary 있으면 우선 사용 (8000자 이하)
   const studyMat=deck.summary||deck.material.slice(0,8000);
 
   async function next(d,forceId,practical){
     d=d||deck;
+    abortRef.current?.abort();
+    const ctrl=new AbortController();
+    abortRef.current=ctrl;
+    const myId=++genId.current;
     setPhase("loading");setQ(null);setEv(null);setAnswer("");setDeeper("");setDontknow("");setErrMsg("");setSubmitErr("");
     setAnnotOpen(false);setHighlightActive(false);setAnnotTool("hl");setAnnotQMode("pen");setAnnotQ("");setAnnotBusy(false);setAnnotAnswer("");setLeftPage(0);
+    setOcrHighlights([]);setOcrImg(null);ocrImgRef.current=null;
     setDerivePlan(null);setDeriveIdx(0);setDeriveHistory([]);setDeriveFeedback("");setDeriveDone(false);setDeriveHintShow(false);setDeriveChecking(false);
+    setFollowupQ("");setFollowupCount(0);setFollowupHistory([]);setFollowupBusy(false);setFollowupEv(null);setFollowupSuccess(false);
     padRef.current?.clear();
     const c=forceId?(d.concepts||[]).find(x=>x.id===forceId)||pickConcept(d,last.current):pickConcept(d,last.current);
     if(!c){setPhase("error");setErrMsg("질문할 개념이 없어.");return;}
     setConcept(c);last.current=c.id;
-    const practicalHint=practical?" 계산이나 수치를 직접 다루는 응용 문제를 선호해.":"";
+    const box=c.box||1;
+    const qtypeRule=practical
+      ?"▶ QTYPE: apply 고정 — 수치나 조건을 직접 주고 계산·풀이를 요구하는 문제."
+      :box<=2
+      ?"▶ QTYPE: recall — 핵심 공식·정의·조건·용어를 정확히 쓰거나 말하게 하는 문제. 답의 개수를 특정하면 더 좋음. (예: '공식을 성분으로 나타내어라', '두 가지 조건을 말하시오', '정의를 써라')"
+      :box<=3
+      ?"▶ QTYPE: recall 또는 understand 중 이 개념에 더 핵심적인 것을 선택."
+      :"▶ QTYPE: understand 또는 apply — 이해·비교·연결·응용을 요구하는 문제.";
     try{
       const raw=await callAI(
-        "학습 튜터. 자료를 보고 학생이 직접 생각해서 답해야 하는 질문 하나를 만들어."+
-        " 이런 방향의 질문이 좋아:"+
-        " '다음 조건에서 균형값을 구하시오 (수치 제시)'"+
-        " '왜/어떻게 이런 결과가 나오는지 설명하시오'"+
-        " '두 개념이 어떻게 다른지, 각각 어떤 상황에서 적용되는지'"+
-        " '이 공식·수치가 의미하는 바를 설명하시오'"+
-        (practicalHint?" 수치를 직접 다루는 계산 방향 선호.":"")+
-        " 수식은 LaTeX($...$, $$...$$). 반드시 아래 형식으로만 출력:\nQUESTION: 질문 내용\nPOINTS: 핵심1 | 핵심2 | 핵심3 (| 구분, 3~5개)\n\n자료:\n"+studyMat.slice(0,6000),
-        "목표 개념: "+c.name+"\n난이도: "+diffLong(c.box),
-        false,{cache:true,maxTok:800,model:CFG.qmodel});
+        "너는 대학 시험 출제 전문가야. 아래 자료에서 목표 개념을 파악하고, 질문 하나를 만들어.\n\n"+
+        "━━ 질문 생성 순서 ━━\n"+
+        "1. 이 개념이 왜 중요한지, 어디에 쓰이는지, 무엇과 연결되는지를 자료에서 파악한다.\n"+
+        "2. 그 핵심을 진짜로 이해했는지 드러나는 질문을 만든다.\n\n"+
+        "━━ 좋은 질문 기준 ━━\n"+
+        "✓ 그 개념을 실제로 이해했을 때만 답할 수 있는 질문\n"+
+        "✓ 왜 그렇게 되는지 / 언제 쓰는지 / 다른 개념과 어떻게 다른지 / 특정 케이스에서 왜 그런 결과가 나오는지\n"+
+        "✓ 시험에 실제로 나올 법한 질문\n"+
+        "✓ 한 문장으로 끝나지 않고 설명이나 풀이를 요구하는 질문\n\n"+
+        "━━ 절대 피할 것 ━━\n"+
+        "✗ '~란 무엇인가' 식 정의 받아쓰기 (recall 유형 제외)\n"+
+        "✗ 자료의 지엽적 수치·각주·예시를 그대로 묻는 질문\n"+
+        "✗ 상식이거나 안 봐도 아는 질문\n"+
+        "✗ 자료에 근거 없어 추측해야 하는 질문\n\n"+
+        qtypeRule+"\n\n"+
+        "━━ 유형별 예시 ━━\n"+
+        "recall: '$\\mathbf{a}\\times\\mathbf{b}$를 성분으로 나타내어라', '피타고라스 정리를 써라', '선형변환이 되기 위한 두 가지 조건을 말하시오 (개수 명시하며 묻는 것이 좋음)'\n"+
+        "understand: '외적이 내적과 근본적으로 다른 점은? 기하학적으로 설명해봐', '왜 이 조건에서 해가 유일한가?', '$\\mathbf{a}\\times\\mathbf{a}$가 항상 영벡터인 이유는?', '자료의 반례를 이용해 이 함수가 왜 선형변환이 아닌지 서술하시오 (반례+이유 설명 요구)', '왜 [특정 케이스]에서 [특정 결과]가 나오는가?'\n"+
+        "apply: '$\\mathbf{a}=(1,2,3),\\,\\mathbf{b}=(4,0,-1)$일 때 $\\mathbf{a}\\times\\mathbf{b}$를 구하시오', '$T(x,y)=2x+y$가 선형변환인지 두 조건으로 보여라 (정의를 직접 적용해 검증하는 문제)'\n\n"+
+        "수식은 LaTeX($...$, $$...$$). 반드시 아래 형식으로만 출력:\nQTYPE: recall 또는 understand 또는 apply\nQUESTION: 질문 내용\nPOINTS: 핵심1 | 핵심2 | 핵심3 (| 구분, 3~5개)\n\n자료:\n"+studyMat.slice(0,6000),
+        "목표 개념: "+c.name+"\n복습 단계: "+diffLong(c.box),
+        false,{cache:true,maxTok:800,model:CFG.qmodel},ctrl.signal);
+      if(genId.current!==myId)return;
       setQ(parseQuestion(raw));setPhase("answering");
-    }catch(e){setPhase("error");setErrMsg("질문 생성 실패: "+e.message);}
+    }catch(e){if(genId.current===myId&&e.name!=="AbortError"){setPhase("error");setErrMsg("질문 생성 실패: "+e.message);}}
   }
-  useEffect(()=>{next(initial);},[]);
+  useEffect(()=>{next(initial);return()=>{abortRef.current?.abort();};},[]);
 
   async function submit(){
-    if(phase!=="answering")return;
+    if(phase!=="answering"&&phase!=="ocr_check")return;
+    if(submitting.current)return;
+    submitting.current=true;
     const hasInk=padRef.current?.hasStrokes();
     const hasTxt=answer.trim().length>0;
-    if(!hasInk&&!hasTxt){setSubmitErr("노트에 써보거나 텍스트로 답을 입력해봐!");return;}
-    const img=hasInk?padRef.current.getImageBase64():null;
-    setPhase("grading");setSubmitErr("");
+    if(!hasInk&&!hasTxt){submitting.current=false;setSubmitErr("노트에 써보거나 텍스트로 답을 입력해봐!");return;}
+    // ocr_check 단계에서 "그냥 채점해줘" 누르면 저장된 img 재사용
+    const img=phase==="ocr_check"?ocrImgRef.current:(hasInk?padRef.current.getImageBase64():null);
+    setPhase("grading");setSubmitErr("");setOcrHighlights([]);setOcrImg(null);
+
+    // ── OCR 사전 체크 (answering 단계 + 손글씨 있을 때만) ──
+    if(phase==="answering"&&img){
+      const sz=padRef.current?.getSize()||{w:800,h:680};
+      try{
+        const ocrRaw=await callAI(
+          "너는 손글씨 OCR 전문가야. 이 학습 답안을 읽어줘. 이미지 크기: "+sz.w+"×"+sz.h+"px.\n"+
+          "읽기 어렵거나 불명확한 글자·수식이 있으면 해당 영역의 대략적 좌표도 알려줘.\n\n"+
+          "다음 형식으로만 출력:\nTEXT: 인식된 전체 텍스트\nUNCLEAR: 없음 (또는 불명확한 영역을 x,y,너비,높이 픽셀 단위로 — 여러 개면 | 로 구분)",
+          [{type:"image",source:{type:"base64",media_type:"image/png",data:img}}],
+          false,{maxTok:400,model:"claude-sonnet-4-6"}
+        );
+        const ocr=parseOcrCheck(ocrRaw);
+        if(ocr.unclear.length>0){
+          ocrImgRef.current=img;
+          setOcrImg("data:image/png;base64,"+img);
+          setOcrImgSize(sz);
+          setOcrHighlights(ocr.unclear);
+          setPhase("ocr_check");
+          submitting.current=false;
+          return;
+        }
+      }catch(e){console.warn("[OCR check]",e.message);}
+    }
     try{
       const userBlocks=[];
       if(img)userBlocks.push({type:"image",source:{type:"base64",media_type:"image/png",data:img}});
-      const textParts=["목표 개념: "+concept.name,"질문: "+q.question,"채점 핵심: "+JSON.stringify(q.key_points||[])];
+      const qtype=q?.qtype||'understand';
+      const qtypeCtx=qtype==='recall'
+        ?"이 문제는 【암기 확인】 유형이야. 정의·공식·용어를 정확히 썼는지가 핵심이야. 공식이 맞으면 correct, 일부 빠지거나 틀리면 partial, 못 쓰면 incorrect."
+        :qtype==='apply'
+        ?"이 문제는 【응용·계산】 유형이야. 수치·풀이 과정이 맞는지가 핵심이야. 과정과 결과가 맞으면 correct, 방향은 맞는데 실수 있으면 partial."
+        :"이 문제는 【이해 확인】 유형이야. 개념을 얼마나 이해했는지가 핵심이야.";
+      const textParts=["문제 유형: "+qtype,"목표 개념: "+concept.name,"질문: "+q.question,"채점 핵심: "+JSON.stringify(q.key_points||[])];
       if(hasTxt)textParts.push("\n학습자 텍스트 답안:\n"+answer.trim());
       if(img)textParts.push("\n학습자가 위 이미지에 손으로 쓴 답도 포함돼. 이미지 속 내용을 읽고 함께 채점해줘.");
       userBlocks.push({type:"text",text:textParts.join("\n")});
       const gradingRaw=await callAI(
-        "너는 채점 조교야. 학습자 답안(텍스트, 손글씨 이미지, 또는 둘 다)을 보고 관대하되 정확하게 채점해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ 등)는 반드시 모두 LaTeX로: 인라인은 $...$, 블록은 $$..$$. 유니코드 기호 직접 사용 금지. 모범답안에 그래프가 필요하면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, 색상: 축=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8). 다음 형식으로만 출력 (JSON·코드블록 없이):\nVERDICT: correct 또는 partial 또는 incorrect\nSCORE: 0-100 숫자만\nFEEDBACK: 맞은 것·빠진 것 2~4문장 (반말, 친근)\nWHY: 왜 그런지 자료 근거 2~3문장\nANSWER: 모범답안 3~5문장 (필요시 SVG 그래프 포함)\n\n자료:\n"+studyMat,
+        "너는 학습 분석 튜터야. "+qtypeCtx+" 학습자 답안을 보고 '이 개념의 본질 대비 내 답의 갭'을 분석해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ 등)는 반드시 LaTeX로: 인라인 $...$, 블록 $$...$$. 유니코드 기호 직접 사용 금지. 다음 형식으로만 출력 (JSON·코드블록 없이):\nESSENCE: 이 질문이 진짜 요구하는 핵심 요소 1~3가지 (학습자가 반드시 알아야 할 것)\nGOT_IT: 내 답이 제대로 담은 부분 (인정해줄 것, 반말)\nGAP: 본질 대비 빠지거나 얕거나 비껴간 핵심 부분 (없으면 정확히 '없음')\nGAP_TYPE: 개념누락 / 이해얕음 / 핵심비껴감 / 표현부족 / 갭없음 중 정확히 하나\nDEPTH: 암기 수준 / 이해 수준 / 설명가능 수준 / 응용가능 수준 중 정확히 하나\nNEXT: 이 갭을 메우려면 구체적으로 뭘 보강해야 하는지 (반말, 1~2문장)\nVERDICT: correct 또는 partial 또는 incorrect (갭없음이면 correct, 핵심 갭이면 partial, 본질 전체 누락이면 incorrect)\nANSWER: 모범답안 3~5문장 (수식 LaTeX, 그래프 필요시 <svg> 태그 직접 — 코드블록 없이, width≤380 height≤260 viewBox 사용, 축=#221C39, 곡선=#6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8)\n\n자료:\n"+studyMat,
         userBlocks,false,{cache:true,maxTok:2048});
       const r=parseGrading(gradingRaw);setEv(r);
       const v=["correct","partial","incorrect"].includes(r.verdict)?r.verdict:"partial";
-      const uc=schedule(concept,v);
-      persist({...deck,concepts:deck.concepts.map(c=>c.id===concept.id?uc:c)});
-      setConcept(uc);setCount(n=>n+1);setPhase("result");
-      setTimeout(()=>padRef.current?.forceColor(PEN_COLORS[2]),50);
+      if(v==="correct"){
+        const uc=schedule(concept,v);
+        persist({...deckRef.current,concepts:deckRef.current.concepts.map(c=>c.id===concept.id?uc:c)});
+        setConcept(uc);setCount(n=>n+1);setPhase("result");
+        setTimeout(()=>padRef.current?.forceColor(PEN_COLORS[2]),50);
+      }else{
+        padRef.current?.clear();setAnswer("");
+        setFollowupCount(1);setFollowupHistory([]);setFollowupEv(null);setFollowupSuccess(false);
+        await generateFollowup(r.gap||r.feedback,[]);
+      }
     }catch(e){setPhase("answering");setSubmitErr("채점 실패: "+e.message);}
+    finally{submitting.current=false;}
+  }
+
+  async function generateFollowup(gap,history){
+    setFollowupBusy(true);
+    try{
+      const histTxt=history.length?"이전 보충 답변:\n"+history.map((h,i)=>(i+1)+". "+h.answer+" → "+h.verdict).join("\n")+"\n\n":"";
+      const raw=await callAI(
+        "너는 소크라테스식 학습 튜터야. 학습자가 개념의 빠진 부분을 스스로 채울 수 있도록 후속 질문을 딱 하나만 만들어. 규칙: ①절대 정답·모범답안을 알려주지 말 것 ②발견된 갭(빠진 핵심)을 정확히 겨냥한 질문 ③'왜', '그렇다면', '어떤 경우에' 형식의 소크라테스식 ④반말, 친근하게 ⑤질문 한 문장만 출력, 설명·안내 없이\n\n자료:\n"+studyMat.slice(0,4000),
+        "개념: "+concept.name+"\n원래 질문: "+q.question+"\n핵심 포인트: "+(q.key_points||[]).join(", ")+"\n발견된 갭: "+gap+"\n\n"+histTxt+"후속 질문만 출력:",
+        false,{maxTok:200,model:CFG.qmodel}
+      );
+      setFollowupQ((raw||"").trim());
+      setPhase("followup");
+    }catch(e){
+      setSubmitErr("후속 질문 생성 실패: "+e.message);
+      setPhase("answering");
+    }
+    setFollowupBusy(false);
+  }
+
+  async function submitFollowup(){
+    if(followupSubmitting.current)return;
+    followupSubmitting.current=true;
+    const hasInk=padRef.current?.hasStrokes();
+    const hasTxt=answer.trim().length>0;
+    if(!hasInk&&!hasTxt){followupSubmitting.current=false;setSubmitErr("답을 써봐!");return;}
+    const img=hasInk?padRef.current.getImageBase64():null;
+    setFollowupBusy(true);setSubmitErr("");
+    try{
+      const userBlocks=[];
+      if(img)userBlocks.push({type:"image",source:{type:"base64",media_type:"image/png",data:img}});
+      const textParts=["개념: "+concept.name,"원래 질문: "+q.question,"후속 질문: "+followupQ];
+      if(hasTxt)textParts.push("\n학습자 답변:\n"+answer.trim());
+      if(img)textParts.push("\n학습자 손글씨 답도 이미지로 포함.");
+      userBlocks.push({type:"text",text:textParts.join("\n")});
+      const raw=await callAI(
+        "너는 학습 분석 튜터야. 후속 질문에 대한 답변만 갭 분석해. 이 후속 질문이 묻는 부분만 평가해 (전체 모범답안 기준 아님). 다음 형식으로만 출력:\nESSENCE: 이 후속 질문이 묻는 핵심\nGOT_IT: 맞게 표현한 부분 (반말)\nGAP: 여전히 부족한 부분 (없으면 정확히 '없음')\nGAP_TYPE: 개념누락 / 이해얕음 / 핵심비껴감 / 표현부족 / 갭없음 중 하나\nDEPTH: 암기 수준 / 이해 수준 / 설명가능 수준 / 응용가능 수준 중 하나\nNEXT: 1문장 (반말)\nVERDICT: correct 또는 partial 또는 incorrect\nANSWER: \n\n자료:\n"+studyMat,
+        userBlocks,false,{cache:true,maxTok:800}
+      );
+      const r=parseGrading(raw);
+      setFollowupEv(r);
+      const newHistory=[...followupHistory,{answer:answer.trim()||(img?"|손글씨|":""),verdict:r.verdict}];
+      setFollowupHistory(newHistory);
+      const newCount=followupCount+1;
+      if(r.verdict==="correct"||newCount>3){
+        setFollowupSuccess(r.verdict==="correct");
+        const finalVerdict=r.verdict==="correct"?"partial":(ev?.verdict||"incorrect");
+        const uc=schedule(concept,finalVerdict);
+        persist({...deckRef.current,concepts:deckRef.current.concepts.map(c=>c.id===concept.id?uc:c)});
+        setConcept(uc);setCount(n=>n+1);
+        padRef.current?.clear();setAnswer("");
+        setPhase("result");
+        setLeftPage(r.verdict==="correct"?0:1);
+        setTimeout(()=>padRef.current?.forceColor(PEN_COLORS[2]),50);
+      }else{
+        setFollowupCount(newCount);
+        padRef.current?.clear();setAnswer("");
+        await generateFollowup(r.gap||r.feedback,newHistory);
+      }
+    }catch(e){setSubmitErr("채점 실패: "+e.message);}
+    finally{followupSubmitting.current=false;}
+    setFollowupBusy(false);
   }
 
   function toggleDeriveMode(cid){
@@ -1408,7 +1712,7 @@ function Study({deck:initial,subjects}){
         if(res.done||deriveIdx+1>=derivePlan.totalSteps){
           setDeriveDone(true);setPhase("derive_done");
           const uc=schedule(concept,"correct");
-          persist({...deck,concepts:deck.concepts.map(c=>c.id===concept.id?uc:c)});
+          persist({...deckRef.current,concepts:deckRef.current.concepts.map(c=>c.id===concept.id?uc:c)});
           setConcept(uc);setCount(n=>n+1);
         }else{
           setDeriveIdx(deriveIdx+1);setDeriveFeedback("");
@@ -1422,9 +1726,9 @@ function Study({deck:initial,subjects}){
     const arc=LS.get("ng:dontknow")||[];
     arc.unshift({id:uid(),deckId:deck.id,conceptId:concept.id,
       conceptName:concept.name,question:q?.question||"",ts:Date.now()});
-    LS.set("ng:dontknow",arc.slice(0,200));
+    if(!LS.set("ng:dontknow",arc.slice(0,200)))console.warn("[handleDontKnow] dontknow 로그 저장 실패");
     const uc={...concept,box:1,dueAt:0};
-    persist({...deck,concepts:deck.concepts.map(c=>c.id===concept.id?uc:c)});
+    persist({...deckRef.current,concepts:deckRef.current.concepts.map(c=>c.id===concept.id?uc:c)});
     setConcept(uc);
     setPhase("dontknow");setDontknow("");setDontknowBusy(true);
     try{
@@ -1454,7 +1758,7 @@ function Study({deck:initial,subjects}){
     const hasQTxt=annotQMode==="type"&&annotQ.trim().length>0;
     if(!hasHL&&!hasQPen&&!hasQTxt)return;
     setAnnotBusy(true);
-    const ctx=ctxText||[ev?.feedback,ev?.why,ev?.model_answer].filter(Boolean).join("\n\n");
+    const ctx=ctxText||[ev?.essence,ev?.gap,ev?.model_answer].filter(Boolean).join("\n\n");
     const userBlocks=[];
     if(hasHL){const img=annotPadRef.current.getImageBase64();userBlocks.push({type:"image",source:{type:"base64",media_type:"image/png",data:img}});}
     if(hasQPen){const img=annotQPadRef.current.getImageBase64();userBlocks.push({type:"image",source:{type:"base64",media_type:"image/png",data:img}});}
@@ -1480,7 +1784,7 @@ function Study({deck:initial,subjects}){
   const vTone=v==="correct"?"mint":v==="incorrect"?"rose":"gold";
   const vLabel=v==="correct"?"오 정확해! 💯":v==="incorrect"?"이건 다시 보자 🔁":"거의 다 왔어 ✏️";
   const isDeriving=phase==="derive_load"||phase==="derive_step"||phase==="derive_done";
-  const isActive=phase==="answering"||phase==="grading"||phase==="result"||phase==="dontknow"||isDeriving;
+  const isActive=phase==="answering"||phase==="grading"||phase==="result"||phase==="dontknow"||isDeriving||phase==="followup"||phase==="ocr_check";
 
   return(
     <section className="study">
@@ -1530,8 +1834,44 @@ function Study({deck:initial,subjects}){
               <div className="chips">
                 <span className="chip">{concept?.name}</span>
                 <span className="chip gho">{diffWord(concept?.box)}</span>
+                {q?.qtype&&<span className="chip" style={{
+                  background:q.qtype==='recall'?"#FFF0E6":q.qtype==='apply'?"#E6F7FF":"#F0EDFF",
+                  color:q.qtype==='recall'?"#C05A00":q.qtype==='apply'?"#0066A3":"#5B21B6",
+                  border:"none",fontSize:11
+                }}>{q.qtype==='recall'?"암기":q.qtype==='apply'?"응용":"이해"}</span>}
               </div>
-              {!isDeriving&&<MathText text={q?.question} tag="h2" className="q"/>}
+              {phase!=="followup"&&<MathText text={q?.question} tag="h2" className="q"/>}
+              {phase==="followup"&&(
+                <div style={{display:"flex",flexDirection:"column",gap:10,flex:1}}>
+                  <div style={{fontSize:12.5,color:"var(--sub)",lineHeight:1.65,padding:"8px 12px",background:"var(--bg)",borderRadius:10,borderLeft:"3px solid var(--line)"}}>
+                    <div style={{fontSize:10,fontWeight:700,color:"var(--sub)",marginBottom:3,letterSpacing:".5px"}}>원래 질문</div>
+                    {q?.question}
+                  </div>
+                  {ev?.gap&&ev.gap_type!=="갭없음"&&ev.gap!=="없음"&&(
+                    <div style={{background:"#FFF5F5",border:"1.5px solid #FECACA",borderRadius:10,padding:"8px 12px"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                        <span style={{fontSize:10,fontWeight:700,color:"#DC2626",letterSpacing:".3px"}}>빠진 것</span>
+                        {ev.gap_type&&<span style={{fontSize:10,background:"#FEE2E2",color:"#B91C1C",borderRadius:5,padding:"1px 6px",fontWeight:600}}>{ev.gap_type}</span>}
+                      </div>
+                      <MathText text={ev.gap} tag="div" style={{fontSize:12.5,color:"#7F1D1D",lineHeight:1.5}}/>
+                    </div>
+                  )}
+                  {followupBusy?(
+                    <div style={{display:"flex",gap:8,alignItems:"center",padding:"12px 0"}}>
+                      <div className="spinner" style={{width:16,height:16,borderWidth:2}}/>
+                      <span className="muted" style={{fontSize:13}}>후속 질문 만드는 중…</span>
+                    </div>
+                  ):(
+                    <div style={{background:"#FFF6E9",border:"1.5px solid #FBD38D",borderRadius:14,padding:"14px 16px"}}>
+                      <div style={{fontFamily:"'Jua',sans-serif",fontSize:11,letterSpacing:".5px",color:"#92620A",marginBottom:8}}>
+                        보충 질문 {followupCount}/3
+                      </div>
+                      <MathText text={followupQ} tag="div" style={{fontSize:15,lineHeight:1.9,fontWeight:600,color:"var(--ink)"}}/>
+                    </div>
+                  )}
+                  <p className="hint" style={{margin:0}}>오른쪽에 보충 답변을 써봐 ✍️</p>
+                </div>
+              )}
               {isDeriving&&(
                 <div style={{marginBottom:8}}>
                   <div className="eyebrow" style={{marginBottom:6}}>증명 쉐도잉 — {concept?.name}</div>
@@ -1551,11 +1891,8 @@ function Study({deck:initial,subjects}){
                           <span style={{fontSize:11,fontWeight:700,display:"block",marginBottom:4,opacity:.7}}>
                             {deriveIdx+1} / {derivePlan.totalSteps} 단계
                           </span>
-                          <MathText text={deriveIdx===0?derivePlan.startHint:("다음 단계를 유도해봐.")} tag="span"/>
+                          <MathText text={derivePlan.hints&&derivePlan.hints[deriveIdx]?derivePlan.hints[deriveIdx]:derivePlan.startHint||"다음 단계를 유도해봐."} tag="span"/>
                         </div>
-                      )}
-                      {deriveFeedback&&phase==="derive_step"&&(
-                        <div className="derive-fb"><MathText text={deriveFeedback} tag="span"/></div>
                       )}
                       {/* 완성 */}
                       {phase==="derive_done"&&(
@@ -1569,7 +1906,7 @@ function Study({deck:initial,subjects}){
                   )}
                 </div>
               )}
-              {!isDeriving&&phase!=="result"&&(
+              {!isDeriving&&phase!=="result"&&phase!=="followup"&&(
                 <p className="hint" style={{margin:"4px 0 0"}}>오른쪽 노트에 직접 써봐 ✍️</p>
               )}
               {phase==="result"&&ev&&(
@@ -1587,22 +1924,79 @@ function Study({deck:initial,subjects}){
                     <button className="pg-btn" onClick={()=>setLeftPage(1)} disabled={leftPage===1}>›</button>
                   </div>
 
-                  {/* ── Page 0: 채점 결과 ── */}
+                  {/* ── Page 0: 갭 분석 결과 ── */}
                   {leftPage===0&&(
                     <>
-                      <div className={"verdict "+vTone}>
-                        <span className="dot"/>{vLabel}
-                        {typeof ev.score==="number"&&<span className="sc">{ev.score}/100</span>}
-                      </div>
-                      <div className="blk"><div className="bl">피드백</div><MathText text={ev.feedback}/></div>
-                      {ev.why&&<div className="blk why"><div className="bl">왜 그런지</div><MathText text={ev.why}/></div>}
-                      <button className="btn gho sm" style={{alignSelf:"flex-end",marginTop:4}} onClick={()=>setLeftPage(1)}>모범 답안 보기 ›</button>
+                      {followupSuccess?(
+                        <>
+                          <div className="verdict mint"><span className="dot"/>갭을 스스로 메웠어! 🎉</div>
+                          {(followupEv?.essence||ev?.essence)&&(
+                            <div style={{background:"#F0EDFF",border:"1.5px solid #C4B5FD",borderRadius:12,padding:"10px 14px"}}>
+                              <div style={{fontSize:10,fontWeight:700,color:"#6C5CE7",letterSpacing:".5px",marginBottom:4}}>이 개념의 본질</div>
+                              <MathText text={followupEv?.essence||ev?.essence} tag="div" style={{fontSize:13,color:"#221C39",lineHeight:1.6}}/>
+                            </div>
+                          )}
+                          {(followupEv?.got_it||ev?.got_it)&&(
+                            <div style={{display:"flex",gap:8,alignItems:"flex-start",padding:"8px 12px",background:"#F0FFF8",border:"1.5px solid #A7F3D0",borderRadius:10}}>
+                              <span style={{color:"#27C2A0",fontSize:15,marginTop:1,flexShrink:0}}>✓</span>
+                              <MathText text={followupEv?.got_it||ev?.got_it} tag="div" style={{fontSize:13,color:"#065F46",lineHeight:1.5}}/>
+                            </div>
+                          )}
+                        </>
+                      ):(
+                        <>
+                          <div className={"verdict "+vTone}><span className="dot"/>{vLabel}</div>
+                          {/* ESSENCE */}
+                          {ev.essence&&(
+                            <div style={{background:"#F0EDFF",border:"1.5px solid #C4B5FD",borderRadius:12,padding:"10px 14px"}}>
+                              <div style={{fontSize:10,fontWeight:700,color:"#6C5CE7",letterSpacing:".5px",marginBottom:4}}>이 개념이 진짜 묻는 것</div>
+                              <MathText text={ev.essence} tag="div" style={{fontSize:13.5,color:"#221C39",lineHeight:1.6}}/>
+                            </div>
+                          )}
+                          {/* GOT_IT */}
+                          {ev.got_it&&(
+                            <div style={{display:"flex",gap:8,alignItems:"flex-start",padding:"8px 12px",background:"#F0FFF8",border:"1.5px solid #A7F3D0",borderRadius:10}}>
+                              <span style={{color:"#27C2A0",fontSize:15,marginTop:1,flexShrink:0}}>✓</span>
+                              <MathText text={ev.got_it} tag="div" style={{fontSize:13,color:"#065F46",lineHeight:1.5}}/>
+                            </div>
+                          )}
+                          {/* GAP */}
+                          {ev.gap&&ev.gap_type!=="갭없음"&&ev.gap!=="없음"?(
+                            <div style={{background:"#FFF5F5",border:"2px solid #FECACA",borderRadius:12,padding:"10px 14px"}}>
+                              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+                                <span style={{fontSize:11,fontWeight:700,color:"#DC2626",letterSpacing:".3px"}}>빠진 것</span>
+                                {ev.gap_type&&<span style={{fontSize:11,background:"#FEE2E2",color:"#B91C1C",borderRadius:6,padding:"2px 7px",fontWeight:600}}>{ev.gap_type}</span>}
+                              </div>
+                              <MathText text={ev.gap} tag="div" style={{fontSize:13.5,color:"#7F1D1D",lineHeight:1.6,fontWeight:500}}/>
+                            </div>
+                          ):ev.gap_type==="갭없음"&&(
+                            <div style={{padding:"8px 12px",background:"#F0FFF8",border:"1.5px solid #A7F3D0",borderRadius:10,fontSize:13,color:"#065F46"}}>
+                              갭 없음 — 핵심을 완전히 잡았어 👍
+                            </div>
+                          )}
+                          {/* DEPTH 게이지 */}
+                          <DepthGauge depth={ev.depth}/>
+                          {/* NEXT */}
+                          {ev.next&&ev.gap_type!=="갭없음"&&(
+                            <div style={{background:"#FFFDF8",border:"1.5px solid var(--line)",borderRadius:10,padding:"8px 12px"}}>
+                              <div style={{fontSize:10,fontWeight:700,color:"var(--sub)",letterSpacing:".5px",marginBottom:3}}>다음에 보강할 것</div>
+                              <MathText text={ev.next} tag="div" style={{fontSize:13,color:"var(--ink)",lineHeight:1.55}}/>
+                            </div>
+                          )}
+                        </>
+                      )}
+                      <button className="btn gho sm" style={{alignSelf:"flex-end",marginTop:4}} onClick={()=>setLeftPage(1)}>모범 답안 펼쳐보기 ›</button>
                     </>
                   )}
 
                   {/* ── Page 1: 해설 ── */}
                   {leftPage===1&&(
                     <>
+                      {followupHistory.length>0&&!followupSuccess&&(
+                        <div style={{background:"#FFF6E9",border:"1px solid #FBE3B8",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#8A5A12",marginBottom:4}}>
+                          3회 시도 완료 — 모범답안으로 개념을 잡아봐 💡
+                        </div>
+                      )}
                       {/* 해설 텍스트 + 오버레이 하이라이트 캔버스 */}
                       <div style={{position:"relative",borderRadius:14}}>
                         <div className="blk" style={{margin:0}}>
@@ -1639,7 +2033,19 @@ function Study({deck:initial,subjects}){
                           </button>
                         </div>
                         {annotQMode==="pen"
-                          ?<QuestionPad ref={annotQPadRef} disabled={annotBusy}/>
+                          ?(<div style={{display:"flex",flexDirection:"column",gap:4}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:5}}>
+                                <div style={{display:"flex",gap:4}}>
+                                  <button className={"btn gho xs"+(annotQTool==="pen"?" on":"")} onClick={()=>setAnnotQTool("pen")}>✏️ 펜</button>
+                                  <button className={"btn gho xs"+(annotQTool==="eraser"?" on":"")} onClick={()=>setAnnotQTool("eraser")}>🧽 지우개</button>
+                                </div>
+                                <div style={{display:"flex",gap:4}}>
+                                  <button className="btn gho xs" onClick={()=>annotQPadRef.current?.undo()} disabled={annotBusy}>↩ 취소</button>
+                                  <button className="btn gho xs" onClick={()=>annotQPadRef.current?.clear()} disabled={annotBusy}>🗑️ 전체</button>
+                                </div>
+                              </div>
+                              <QuestionPad ref={annotQPadRef} disabled={annotBusy} tool={annotQTool}/>
+                            </div>)
                           :<textarea value={annotQ} onChange={e=>setAnnotQ(e.target.value)} disabled={annotBusy}
                               placeholder="모르는 게 뭔지 타이핑해봐"
                               style={{width:"100%",minHeight:64,padding:"8px 10px",borderRadius:10,
@@ -1681,6 +2087,12 @@ function Study({deck:initial,subjects}){
                         border:"1.5px solid var(--line)",fontFamily:"'Noto Sans KR',sans-serif",
                         fontSize:13,resize:"vertical",outline:"none",background:"var(--bg)",color:"var(--ink)"}}/>
                     {submitErr&&<div className="err">{submitErr}</div>}
+                    {deriveFeedback&&(
+                      <div style={{background:"#FFF5F5",border:"1.5px solid #FECACA",borderRadius:11,padding:"10px 14px"}}>
+                        <div style={{fontSize:10,fontWeight:700,color:"#DC2626",letterSpacing:".4px",marginBottom:4}}>피드백</div>
+                        <MathText text={deriveFeedback} tag="div" style={{fontSize:13,color:"#7F1D1D",lineHeight:1.6}}/>
+                      </div>
+                    )}
                     {deriveHintShow&&derivePlan?.hints[deriveIdx]&&(
                       <div className="derive-hint">
                         <span style={{fontSize:11,fontWeight:700,display:"block",marginBottom:3}}>힌트</span>
@@ -1704,16 +2116,59 @@ function Study({deck:initial,subjects}){
                   </div>
                 )}
               </div>
+            ):phase==="ocr_check"?(
+              <div className="card" style={{padding:16,display:"flex",flexDirection:"column",gap:12}}>
+                <div style={{fontSize:13,fontWeight:700,color:"var(--rose)"}}>✏️ 이 부분이 잘 안 읽혔어</div>
+                <div style={{position:"relative",display:"inline-block",width:"100%"}}>
+                  <img src={ocrImg} style={{width:"100%",borderRadius:12,display:"block"}}/>
+                  {ocrHighlights.map((h,i)=>(
+                    <div key={i} style={{
+                      position:"absolute",
+                      left:(h.x/ocrImgSize.w*100)+"%",
+                      top:(h.y/ocrImgSize.h*100)+"%",
+                      width:(h.w/ocrImgSize.w*100)+"%",
+                      height:(h.h/ocrImgSize.h*100)+"%",
+                      border:"2.5px solid var(--rose)",
+                      borderRadius:4,
+                      background:"rgba(255,107,138,0.18)",
+                      pointerEvents:"none"
+                    }}/>
+                  ))}
+                </div>
+                <p style={{fontSize:13,color:"var(--sub)",margin:0,lineHeight:1.7}}>
+                  빨간 박스 부분이 잘 안 보여. 조금 더 또렷하게 써줄 수 있어? 😊<br/>
+                  <span style={{fontSize:12}}>아니면 그냥 채점해줄게.</span>
+                </p>
+                <div className="row">
+                  <button className="btn gho sm" onClick={()=>{setPhase("answering");setOcrHighlights([]);setOcrImg(null);padRef.current?.clear();}}>
+                    다시 쓸게 ✏️
+                  </button>
+                  <button className="btn pri sm" onClick={()=>submit()}>
+                    그냥 채점해줘 →
+                  </button>
+                </div>
+              </div>
             ):phase==="dontknow"?(
               <div className="card" style={{padding:20,display:"flex",flexDirection:"column",gap:14,overflowY:"auto",maxHeight:"calc(100vh - 280px)"}}>
-                <div className="bl" style={{fontSize:13,fontWeight:700}}>📖 이 개념 먼저 배워보자</div>
+                <div style={{display:"flex",alignItems:"center",gap:12,paddingBottom:10,borderBottom:"1.5px solid var(--line)"}}>
+                  <span style={{fontSize:26,lineHeight:1}}>📖</span>
+                  <div>
+                    <div style={{fontFamily:"'Jua',sans-serif",fontSize:17,color:"var(--ink)",lineHeight:1.3}}>이 개념 먼저 잡아보자</div>
+                    <div style={{fontSize:12,color:"var(--sub)",marginTop:3}}>{concept?.name}</div>
+                  </div>
+                </div>
                 {dontknowBusy&&(
-                  <div style={{display:"flex",gap:10,alignItems:"center"}}><div className="spinner" style={{width:20,height:20,borderWidth:2}}/><span className="muted" style={{fontSize:13}}>설명 불러오는 중…</span></div>
+                  <div style={{display:"flex",gap:10,alignItems:"center",padding:"12px 0"}}><div className="spinner" style={{width:22,height:22,borderWidth:2.5}}/><span className="muted" style={{fontSize:13}}>설명 불러오는 중…</span></div>
                 )}
                 {!dontknowBusy&&dontknow&&(
                   <>
-                    <div style={{position:"relative",borderRadius:14}}>
-                      <MathText text={dontknow} tag="div" style={{fontSize:14,lineHeight:1.9}}/>
+                    <div style={{position:"relative",borderRadius:16}}>
+                      <div style={{background:"var(--pri-s)",border:"1.5px solid #C8C2F0",borderRadius:16,padding:"18px 20px"}}>
+                        <div style={{fontFamily:"'Jua',sans-serif",fontSize:11,letterSpacing:".6px",color:"var(--pri)",marginBottom:12,display:"flex",alignItems:"center",gap:5}}>
+                          <span style={{width:6,height:6,borderRadius:"50%",background:"var(--pri)",display:"inline-block"}}/>개념 설명
+                        </div>
+                        <MathText text={dontknow} tag="div" style={{fontSize:14.5,lineHeight:2.1,color:"var(--ink)"}}/>
+                      </div>
                       {highlightActive&&<AnnotPad ref={annotPadRef} disabled={annotBusy} tool={annotTool}/>}
                     </div>
                     <div className="annot-section">
@@ -1737,7 +2192,13 @@ function Study({deck:initial,subjects}){
                         </button>
                       </div>
                       {annotQMode==="pen"
-                        ?<QuestionPad ref={annotQPadRef} disabled={annotBusy}/>
+                        ?(<div style={{display:"flex",flexDirection:"column",gap:4}}>
+                            <div style={{display:"flex",justifyContent:"flex-end",gap:5}}>
+                              <button className="btn gho xs" onClick={()=>annotQPadRef.current?.undo()} disabled={annotBusy}>↩ 취소</button>
+                              <button className="btn gho xs" onClick={()=>annotQPadRef.current?.clear()} disabled={annotBusy}>🗑️ 전체</button>
+                            </div>
+                            <QuestionPad ref={annotQPadRef} disabled={annotBusy}/>
+                          </div>)
                         :<textarea value={annotQ} onChange={e=>setAnnotQ(e.target.value)} disabled={annotBusy}
                             placeholder="모르는 게 뭔지 타이핑해봐"
                             style={{width:"100%",minHeight:64,padding:"8px 10px",borderRadius:10,
@@ -1761,39 +2222,50 @@ function Study({deck:initial,subjects}){
               </div>
             ):(
               <div className="card" style={{padding:14,display:"flex",flexDirection:"column",gap:10}}>
-                {phase==="grading"&&(
+                {(phase==="grading"||followupBusy)&&(
                   <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0"}}>
                     <div className="spinner" style={{width:20,height:20,borderWidth:2}}/>
                     <span className="muted" style={{fontSize:13}}>채점 중…</span>
                   </div>
                 )}
-                <PenPad ref={padRef} kind="answer" hideOcr penOnlyDefault={true} disabled={phase==="grading"}/>
+                <PenPad ref={padRef} kind="answer" hideOcr penOnlyDefault={true} disabled={phase==="grading"||followupBusy}/>
                 {phase==="result"&&<p className="hint" style={{margin:"2px 0 0",fontSize:12}}>✏️ 빨간 펜으로 보완해봐</p>}
                 {phase!=="result"&&(
                   <textarea
                     value={answer}
                     onChange={e=>setAnswer(e.target.value)}
-                    disabled={phase==="grading"}
+                    disabled={phase==="grading"||followupBusy}
                     placeholder="텍스트로도 답할 수 있어 (선택사항)"
                     style={{width:"100%",minHeight:72,padding:"8px 10px",borderRadius:10,
                       border:"1.5px solid var(--line)",fontFamily:"'Noto Sans KR',sans-serif",
                       fontSize:13,resize:"vertical",outline:"none",background:"var(--bg)",color:"var(--ink)"}}
                   />
                 )}
-                {phase!=="result"&&(
+                {phase==="answering"&&(
                   <>
-                    {concept?.deriveMode==="derive"&&phase==="answering"&&(
+                    {concept?.deriveMode==="derive"&&(
                       <button className="btn gho sm" style={{borderColor:"var(--pri)",color:"var(--pri-d)"}}
                         onClick={startDerive}>✏️ 직접 유도해볼게</button>
                     )}
                     {submitErr&&<div className="err">{submitErr}</div>}
                     <div className="row">
-                      <button className="btn pri" onClick={submit} disabled={phase==="grading"}>
-                        {phase==="grading"?"채점 중…":"제출 ✓"}
+                      <button className="btn pri" onClick={submit} disabled={phase==="grading"}>제출 ✓</button>
+                      <button className="btn gho" onClick={handleDontKnow} disabled={phase==="grading"}>몰라요 😅</button>
+                    </div>
+                  </>
+                )}
+                {phase==="followup"&&(
+                  <>
+                    {submitErr&&<div className="err">{submitErr}</div>}
+                    <div className="row">
+                      <button className="btn pri" onClick={submitFollowup} disabled={followupBusy}>
+                        {followupBusy?"채점 중…":"보충 답변 제출 ✓"}
                       </button>
-                      <button className="btn gho" onClick={handleDontKnow} disabled={phase==="grading"}>
-                        몰라요 😅
-                      </button>
+                      <button className="btn gho" onClick={()=>{
+                        const uc=schedule(concept,ev?.verdict||"incorrect");
+                        persist({...deckRef.current,concepts:deckRef.current.concepts.map(c=>c.id===concept.id?uc:c)});
+                        setConcept(uc);setCount(n=>n+1);setPhase("result");setLeftPage(1);
+                      }} disabled={followupBusy}>모범답안 볼게</button>
                     </div>
                   </>
                 )}
@@ -1813,7 +2285,9 @@ function sanitizeSvg(s){
     .replace(/<!--[\s\S]*?-->/g,"")
     .replace(/<script[\s\S]*?<\/script>/gi,"")
     .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi,"")
-    .replace(/javascript\s*:/gi,"");
+    .replace(/javascript\s*:/gi,"")
+    .replace(/data\s*:\s*text\/html/gi,"")
+    .replace(/<a\s[^>]*href\s*=[^>]*>/gi,(m)=>m.replace(/href\s*=\s*["'][^"']*["']/gi,""));
 }
 
 /* ── 수식+그래프 렌더러 ──

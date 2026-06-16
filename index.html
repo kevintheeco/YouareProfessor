@@ -891,6 +891,13 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
     window.addEventListener("resize",syncSize);
     return()=>{ro.disconnect();window.removeEventListener("resize",syncSize);};
   },[]);
+  useEffect(()=>{
+    const c=cvs.current;if(!c)return;
+    const prev=(e)=>{if(e.touches[0]?.touchType==="stylus"||e.touches[0]?.radiusX===0)e.preventDefault();};
+    c.addEventListener("touchstart",prev,{passive:false});
+    c.addEventListener("touchmove",prev,{passive:false});
+    return()=>{c.removeEventListener("touchstart",prev);c.removeEventListener("touchmove",prev);};
+  },[]);
   const pt=(e)=>{const r=cvs.current.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};};
   function eraseAt(x,y){
     const R=22*22,prev=strokes.current.length;
@@ -929,7 +936,7 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
   return(
     <canvas ref={cvs}
       style={{position:"absolute",top:0,left:0,
-        mixBlendMode:"multiply",touchAction:"pan-x pan-y",zIndex:5,
+        mixBlendMode:"multiply",touchAction:"none",zIndex:5,
         cursor:disabled?"not-allowed":tool==="eraser"?"cell":"crosshair",
         pointerEvents:disabled?"none":"auto"}}
       onPointerDown={down} onPointerMove={move} onPointerUp={up}
@@ -968,6 +975,13 @@ const QuestionPad=React.forwardRef(function QuestionPad({disabled,tool="pen"},fw
     });
   }
   useEffect(()=>{setup();const f=()=>setup();window.addEventListener("resize",f);return()=>window.removeEventListener("resize",f);},[]);
+  useEffect(()=>{
+    const c=cvs.current;if(!c)return;
+    const prev=(e)=>{if(e.touches[0]?.touchType==="stylus"||e.touches[0]?.radiusX===0)e.preventDefault();};
+    c.addEventListener("touchstart",prev,{passive:false});
+    c.addEventListener("touchmove",prev,{passive:false});
+    return()=>{c.removeEventListener("touchstart",prev);c.removeEventListener("touchmove",prev);};
+  },[]);
   const pt=(e)=>{const r=cvs.current.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};};
   function eraseAt(x,y){
     const R=16*16,prev=strokes.current.length;
@@ -977,9 +991,10 @@ const QuestionPad=React.forwardRef(function QuestionPad({disabled,tool="pen"},fw
   function down(e){
     if(disabled)return;
     if(e.pointerType!=="pen")return;
+    e.preventDefault();
     const isSPenEraser=(!!(e.buttons&34)||e.button===2);
     if(isSPenEraser||tool==="eraser"){eraseAt(pt(e).x,pt(e).y);return;}
-    e.preventDefault();drawing.current=true;
+    drawing.current=true;
     try{e.target.setPointerCapture(e.pointerId);}catch(_){}
     if(strokes.current.length>=500)strokes.current.shift();
     strokes.current.push({pts:[pt(e)]});
@@ -1058,6 +1073,13 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     });
   }
   useEffect(()=>{setup();const f=()=>setup();window.addEventListener("resize",f);return()=>window.removeEventListener("resize",f);},[]);
+  useEffect(()=>{
+    const c=canvasRef.current;if(!c)return;
+    const prev=(e)=>{if(e.touches[0]?.touchType==="stylus"||e.touches[0]?.radiusX===0)e.preventDefault();};
+    c.addEventListener("touchstart",prev,{passive:false});
+    c.addEventListener("touchmove",prev,{passive:false});
+    return()=>{c.removeEventListener("touchstart",prev);c.removeEventListener("touchmove",prev);};
+  },[]);
 
   const pt=(e)=>{const r=canvasRef.current.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top,p:e.pressure||.5};};
   function eraseAt(x,y){

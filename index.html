@@ -478,6 +478,21 @@ async function processPdf(base64){
   }
 }
 
+// 기출/족보에서 실제 출제 문제들을 추출 (개념 태그 + 정답이 있으면 함께)
+async function extractExamQuestions(material,conceptNames){
+  try{
+    const r=await callAI(
+      "너는 기출문제·족보 분석 전문가야. 자료에서 실제로 출제된 문제들을 빠짐없이 뽑아내. 각 문제마다:\n"+
+      "- question: 문제 본문 (보기·조건 포함, 수식은 LaTeX $...$ 형식)\n"+
+      "- concept: 아래 [개념 목록] 중 이 문제가 가장 관련된 것 하나를 그대로 골라 적기\n"+
+      "- answer: 자료에 정답·해설이 있으면 그대로 정리해 적고, 없으면 빈 문자열\n"+
+      "JSON만 출력: {\"questions\":[{\"question\":\"...\",\"concept\":\"...\",\"answer\":\"...\"}]}",
+      "[개념 목록]: "+conceptNames.join(", ")+"\n\n[자료]:\n"+material.slice(0,14000),
+      true,{maxTok:3500});
+    return Array.isArray(r.questions)?r.questions.filter(q=>q&&q.question):[];
+  }catch(e){console.warn("[extractExamQuestions]",e.message);return[];}
+}
+
 /* 파일 → base64 */
 const toB64=(file)=>new Promise((res,rej)=>{
   const r=new FileReader();r.onload=()=>res(String(r.result).split(",")[1]);r.onerror=rej;r.readAsDataURL(file);
@@ -1238,6 +1253,7 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
   const [err,setErr]=useState("");
   const [pen,setPen]=useState(false);
   const [newSubj,setNewSubj]=useState("");
+  const [isExam,setIsExam]=useState(false);
   const append=(t)=>{if(t)setMaterial(p=>(p.trim()?p.trim()+"\n":"")+t);};
 
   // 새 과목 빠른 추가
@@ -1331,6 +1347,13 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
     }
     if(!concepts.length)concepts=["전체 자료"];
 
+    // ── 기출/족보 문제 추출 ──
+    let examQuestions=[];
+    if(isExam){
+      setBusyMsg("기출문제 뽑아내는 중…");
+      examQuestions=(await extractExamQuestions(fullMaterial,concepts)).slice(0,25);
+    }
+
     // ── 요약 ──
     let summary=pdfSummaryText;
     if(!summary&&fullMaterial.length>2000){
@@ -1346,6 +1369,7 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
     const id=uid();
     const materialToStore=summary?fullMaterial.slice(0,5000):fullMaterial.slice(0,12000);
     const deck={id,name:finalName,subjId,material:materialToStore,summary,createdAt:Date.now(),
+      isExam:isExam&&examQuestions.length>0,examQuestions,
       concepts:concepts.map(nm=>({id:uid(),name:String(nm).slice(0,80),box:1,dueAt:0,reps:0,lapses:0}))};
 
     const usedBytes=getStorageSize();
@@ -1385,6 +1409,18 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
       {/* 제목 */}
       <input className="field" placeholder="제목 — 예: 선형대수 5장 (고유값)" value={name}
         onChange={e=>setName(e.target.value)} disabled={busy}/>
+
+      {/* 기출/족보 토글 */}
+      <label style={{display:"flex",alignItems:"center",gap:11,padding:"12px 15px",cursor:busy?"default":"pointer",
+        border:"1.5px solid "+(isExam?"var(--pri)":"var(--line)"),borderRadius:14,
+        background:isExam?"var(--pri-s)":"#FBFAFF",transition:"all .2s"}}>
+        <input type="checkbox" checked={isExam} disabled={busy} onChange={e=>setIsExam(e.target.checked)}
+          style={{width:18,height:18,accentColor:"var(--pri)",flexShrink:0}}/>
+        <div style={{minWidth:0}}>
+          <div style={{fontSize:13.5,fontWeight:700,color:isExam?"var(--pri-d)":"var(--ink)"}}>📑 기출문제·족보예요</div>
+          <div style={{fontSize:11.5,color:"var(--sub)",marginTop:2,lineHeight:1.5}}>실제 문제를 뽑아서 그대로 풀고, 변형·심화문제까지 자동으로 만들어줘</div>
+        </div>
+      </label>
 
       {/* 내용 */}
       <textarea className="field" rows={7} disabled={busy} value={material}

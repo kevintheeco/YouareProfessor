@@ -2216,11 +2216,17 @@ function Study({deck:initial,subjects}){
                       </div>
                       {annotQMode==="pen"
                         ?(<div style={{display:"flex",flexDirection:"column",gap:4}}>
-                            <div style={{display:"flex",justifyContent:"flex-end",gap:5}}>
-                              <button className="btn gho xs" onClick={()=>annotQPadRef.current?.undo()} disabled={annotBusy}>↩ 취소</button>
-                              <button className="btn gho xs" onClick={()=>annotQPadRef.current?.clear()} disabled={annotBusy}>🗑️ 전체</button>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:5}}>
+                              <div style={{display:"flex",gap:4}}>
+                                <button className={"btn gho xs"+(annotQTool==="pen"?" on":"")} onClick={()=>setAnnotQTool("pen")} disabled={annotBusy}>✏️ 펜</button>
+                                <button className={"btn gho xs"+(annotQTool==="eraser"?" on":"")} onClick={()=>setAnnotQTool("eraser")} disabled={annotBusy}>🧽 지우개</button>
+                              </div>
+                              <div style={{display:"flex",gap:4}}>
+                                <button className="btn gho xs" onClick={()=>annotQPadRef.current?.undo()} disabled={annotBusy}>↩ 취소</button>
+                                <button className="btn gho xs" onClick={()=>annotQPadRef.current?.clear()} disabled={annotBusy}>🗑️ 전체</button>
+                              </div>
                             </div>
-                            <QuestionPad ref={annotQPadRef} disabled={annotBusy}/>
+                            <QuestionPad ref={annotQPadRef} disabled={annotBusy} tool={annotQTool}/>
                           </div>)
                         :<textarea value={annotQ} onChange={e=>setAnnotQ(e.target.value)} disabled={annotBusy}
                             placeholder="모르는 게 뭔지 타이핑해봐"

@@ -1618,9 +1618,16 @@ function Study({deck:initial,subjects}){
         setConcept(uc);setCount(n=>n+1);setPhase("result");
         setTimeout(()=>padRef.current?.forceColor(PEN_COLORS[2]),50);
       }else{
-        padRef.current?.clear();setAnswer("");
-        setFollowupCount(1);setFollowupHistory([]);setFollowupEv(null);setFollowupSuccess(false);
-        await generateFollowup(r.gap||r.feedback,[]);
+        const coreGap=r.gap&&r.gap!=="없음"&&(r.gap_type==="개념누락"||r.gap_type==="핵심비껴감");
+        if(coreGap){
+          padRef.current?.clear();setAnswer("");
+          setFollowupCount(1);setFollowupHistory([]);setFollowupEv(null);setFollowupSuccess(false);
+          await generateFollowup(r.gap,[]);
+        }else{
+          const uc=schedule(concept,v);
+          persist({...deckRef.current,concepts:deckRef.current.concepts.map(c=>c.id===concept.id?uc:c)});
+          setConcept(uc);setCount(n=>n+1);setPhase("result");
+        }
       }
     }catch(e){setPhase("answering");setSubmitErr("채점 실패: "+e.message);}
     finally{submitting.current=false;}
@@ -1668,21 +1675,15 @@ function Study({deck:initial,subjects}){
       const newHistory=[...followupHistory,{answer:answer.trim()||(img?"|손글씨|":""),verdict:r.verdict}];
       setFollowupHistory(newHistory);
       const newCount=followupCount+1;
-      if(r.verdict==="correct"||newCount>3){
-        setFollowupSuccess(r.verdict==="correct");
-        const finalVerdict=r.verdict==="correct"?"partial":(ev?.verdict||"incorrect");
-        const uc=schedule(concept,finalVerdict);
-        persist({...deckRef.current,concepts:deckRef.current.concepts.map(c=>c.id===concept.id?uc:c)});
-        setConcept(uc);setCount(n=>n+1);
-        padRef.current?.clear();setAnswer("");
-        setPhase("result");
-        setLeftPage(r.verdict==="correct"?0:1);
-        setTimeout(()=>padRef.current?.forceColor(PEN_COLORS[2]),50);
-      }else{
-        setFollowupCount(newCount);
-        padRef.current?.clear();setAnswer("");
-        await generateFollowup(r.gap||r.feedback,newHistory);
-      }
+      setFollowupSuccess(r.verdict==="correct");
+      const finalVerdict=r.verdict==="correct"?"partial":(ev?.verdict||"incorrect");
+      const uc=schedule(concept,finalVerdict);
+      persist({...deckRef.current,concepts:deckRef.current.concepts.map(c=>c.id===concept.id?uc:c)});
+      setConcept(uc);setCount(n=>n+1);
+      padRef.current?.clear();setAnswer("");
+      setPhase("result");
+      setLeftPage(r.verdict==="correct"?0:1);
+      setTimeout(()=>padRef.current?.forceColor(PEN_COLORS[2]),50);
     }catch(e){setSubmitErr("채점 실패: "+e.message);}
     finally{followupSubmitting.current=false;}
     setFollowupBusy(false);
@@ -1886,7 +1887,7 @@ function Study({deck:initial,subjects}){
                   ):(
                     <div style={{background:"#FFF6E9",border:"1.5px solid #FBD38D",borderRadius:14,padding:"14px 16px"}}>
                       <div style={{fontFamily:"'Jua',sans-serif",fontSize:11,letterSpacing:".5px",color:"#92620A",marginBottom:8}}>
-                        보충 질문 {followupCount}/3
+                        보충 질문
                       </div>
                       <MathText text={followupQ} tag="div" style={{fontSize:15,lineHeight:1.9,fontWeight:600,color:"var(--ink)"}}/>
                     </div>

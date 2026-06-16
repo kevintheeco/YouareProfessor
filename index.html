@@ -234,26 +234,78 @@ a{color:var(--pri-d)}
 }
 </style>
 
-<div id="root"></div>
+<div id="root"><div style="display:flex;justify-content:center;align-items:center;min-height:60vh;color:#857FA0;font-family:'Noto Sans KR',sans-serif;font-size:14px">불러오는 중…</div></div>
 
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
-/* ── 저장소 ── */
+/* ── 저장소: IndexedDB(대용량) + 메모리 캐시, 실패 시 localStorage 폴백 ── */
+const DB_NAME="nigakyo", DB_STORE="kv";
+let _idb=null;   // IndexedDB 핸들 (null이면 localStorage 폴백)
+let _cache={};   // ng:* 전체 메모리 미러 (동기 읽기용)
+
+function _idbOpen(){
+  return new Promise((res,rej)=>{
+    let req;try{req=indexedDB.open(DB_NAME,1);}catch(e){return rej(e);}
+    req.onupgradeneeded=()=>{try{req.result.createObjectStore(DB_STORE);}catch(_){}};
+    req.onsuccess=()=>res(req.result);
+    req.onerror=()=>rej(req.error);
+  });
+}
+function _idbAll(db){
+  return new Promise((res)=>{
+    const out={};
+    try{
+      const cur=db.transaction(DB_STORE,"readonly").objectStore(DB_STORE).openCursor();
+      cur.onsuccess=()=>{const c=cur.result;if(c){out[c.key]=c.value;c.continue();}else res(out);};
+      cur.onerror=()=>res(out);
+    }catch(e){res(out);}
+  });
+}
+function _idbPut(k,v){try{_idb.transaction(DB_STORE,"readwrite").objectStore(DB_STORE).put(v,k);}catch(e){console.warn("[idb put]",e);}}
+function _idbDel(k){try{_idb.transaction(DB_STORE,"readwrite").objectStore(DB_STORE).delete(k);}catch(e){console.warn("[idb del]",e);}}
+
+async function initStorage(){
+  try{
+    _idb=await _idbOpen();
+    _cache=await _idbAll(_idb);
+    // 첫 실행 마이그레이션: IndexedDB가 비어있고 localStorage에 기존 데이터가 있으면 복사
+    // (localStorage 원본은 지우지 않고 백업으로 보존)
+    if(Object.keys(_cache).length===0){
+      for(let i=0;i<localStorage.length;i++){
+        const k=localStorage.key(i);
+        if(k&&k.startsWith("ng:")){
+          let v;try{v=JSON.parse(localStorage.getItem(k));}catch{v=localStorage.getItem(k);}
+          _cache[k]=v;_idbPut(k,v);
+        }
+      }
+    }
+  }catch(e){
+    console.warn("[storage] IndexedDB 사용 불가 — localStorage 폴백",e);
+    _idb=null;_cache={};
+    try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith("ng:")){try{_cache[k]=JSON.parse(localStorage.getItem(k));}catch{_cache[k]=localStorage.getItem(k);}}}}catch(_){}
+  }
+}
+
 const LS = {
-  get(k){try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch{return null}},
+  get(k){return Object.prototype.hasOwnProperty.call(_cache,k)?_cache[k]:null;},
   set(k,v){
-    try{localStorage.setItem(k,JSON.stringify(v));return true;}
-    catch(e){console.error("[LS] 저장 실패:",k,e);return false;}
+    _cache[k]=v;
+    try{
+      if(_idb)_idbPut(k,v);
+      else localStorage.setItem(k,JSON.stringify(v));
+      return true;
+    }catch(e){console.error("[LS] 저장 실패:",k,e);return false;}
   },
-  del(k){try{localStorage.removeItem(k)}catch{}},
+  del(k){delete _cache[k];try{if(_idb)_idbDel(k);else localStorage.removeItem(k);}catch{}},
 };
 function getStorageSize(){
   let t=0;
-  try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith("ng:"))t+=(k.length+(localStorage.getItem(k)||"").length)*2;}}
+  try{for(const k in _cache){if(k.startsWith("ng:"))t+=(k.length+JSON.stringify(_cache[k]).length)*2;}}
   catch{}
   return t;
 }
+const STORAGE_CAP=()=>_idb?200*1024*1024:4.5*1024*1024;
 function formatSize(b){
   if(b<1024)return b+"B";
   if(b<1048576)return(b/1024).toFixed(1)+"KB";
@@ -271,13 +323,14 @@ const defaultSubjects=()=>LS.get(SUBJS_KEY)||[
   {id:"etc", name:"기타",color:"#857FA0"},
 ];
 
-/* ── API 설정 ── */
-const CFG={
-  key:LS.get("ng:key")||"",
-  model:LS.get("ng:model")||"claude-sonnet-4-6",
-  qmodel:LS.get("ng:qmodel")||"claude-haiku-4-5-20251001",
-  geminiKey:LS.get("ng:geminiKey")||"",
-};
+/* ── API 설정 (initStorage 후 loadCFG로 채움) ── */
+const CFG={key:"",model:"claude-sonnet-4-6",qmodel:"claude-haiku-4-5-20251001",geminiKey:""};
+function loadCFG(){
+  CFG.key=LS.get("ng:key")||"";
+  CFG.model=LS.get("ng:model")||"claude-sonnet-4-6";
+  CFG.qmodel=LS.get("ng:qmodel")||"claude-haiku-4-5-20251001";
+  CFG.geminiKey=LS.get("ng:geminiKey")||"";
+}
 const MODELS=[
   {id:"claude-sonnet-4-6",label:"Sonnet 4.6 · 추천"},
   {id:"gemini-2.0-flash",label:"Gemini 2.0 Flash · 무료 가능"},
@@ -700,7 +753,7 @@ function Onboard({onDone}){
 }
 function Settings({onDone}){
   const [storSize,setStorSize]=useState(()=>getStorageSize());
-  const MAX=5*1024*1024;
+  const MAX=STORAGE_CAP();
   const pct=Math.min(100,Math.round(storSize/MAX*100));
   const barColor=pct>=90?"var(--rose)":pct>=70?"var(--gold)":"var(--mint)";
   return(
@@ -708,8 +761,8 @@ function Settings({onDone}){
       <div className="eyebrow">설정</div>
       <div>
         <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5,color:"var(--sub)",marginBottom:6}}>
-          <span>저장 공간</span>
-          <span style={{fontWeight:700,color:pct>=70?barColor:"var(--sub)"}}>{formatSize(storSize)} / 5MB ({pct}%)</span>
+          <span>저장 공간 {_idb?"(대용량 모드)":"(기본 모드)"}</span>
+          <span style={{fontWeight:700,color:pct>=70?barColor:"var(--sub)"}}>{formatSize(storSize)} / {formatSize(MAX)} ({pct}%)</span>
         </div>
         <div className="bar"><i style={{width:pct+"%",background:barColor}}/></div>
         {pct>=80&&<p className="err" style={{fontSize:12.5,marginTop:8}}>⚠️ 저장 공간이 부족해. 오래된 자료를 삭제해줘.</p>}
@@ -1376,8 +1429,8 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
       concepts:concepts.map(nm=>({id:uid(),name:String(nm).slice(0,80),box:1,dueAt:0,reps:0,lapses:0}))};
 
     const usedBytes=getStorageSize();
-    if(usedBytes>4.5*1024*1024){
-      fail("저장 공간이 부족해 ("+formatSize(usedBytes)+" / 5MB). 오래된 자료를 먼저 삭제해줘.");return;
+    if(usedBytes>STORAGE_CAP()){
+      fail("저장 공간이 부족해 ("+formatSize(usedBytes)+"). 오래된 자료를 먼저 삭제해줘.");return;
     }
     if(!LS.set(dk(id),deck)){fail("저장 실패: 저장 공간이 꽉 찼어.");return;}
     if(!LS.set(DECKS_KEY,[{id,name:deck.name,subjId},...(LS.get(DECKS_KEY)||[])])){
@@ -2626,5 +2679,12 @@ function Meter({box}){
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+initStorage().then(()=>{
+  loadCFG();
+  ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+}).catch(e=>{
+  console.error("[boot]",e);
+  loadCFG();
+  ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+});
 </script>

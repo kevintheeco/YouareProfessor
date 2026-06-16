@@ -1636,7 +1636,8 @@ function Study({deck:initial,subjects}){
     submitting.current=true;
     const hasInk=padRef.current?.hasStrokes();
     const hasTxt=answer.trim().length>0;
-    if(!hasInk&&!hasTxt){submitting.current=false;setSubmitErr("노트에 써보거나 텍스트로 답을 입력해봐!");return;}
+    const hasOcrImg=phase==="ocr_check"&&!!ocrImgRef.current;
+    if(!hasInk&&!hasTxt&&!hasOcrImg){submitting.current=false;setSubmitErr("노트에 써보거나 텍스트로 답을 입력해봐!");return;}
     // ocr_check 단계에서 "그냥 채점해줘" 누르면 저장된 img 재사용
     const img=phase==="ocr_check"?ocrImgRef.current:(hasInk?padRef.current.getImageBase64():null);
     setPhase("grading");setSubmitErr("");setOcrHighlights([]);setOcrImg(null);

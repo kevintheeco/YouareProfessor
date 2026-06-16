@@ -315,6 +315,25 @@ const DECKS_KEY="ng:decks";
 const SUBJS_KEY="ng:subjects";
 const dk=(id)=>"ng:deck:"+id;
 
+// ── 백업: 학습 데이터 내보내기/불러오기 (API 키는 보안상 제외) ──
+function exportBackup(){
+  const data={};
+  for(const k in _cache){if(k.startsWith("ng:")&&k!=="ng:key"&&k!=="ng:geminiKey")data[k]=_cache[k];}
+  const blob=new Blob([JSON.stringify({app:"nigakyo",version:1,exportedAt:Date.now(),data},null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;a.download="니가교수_백업_"+new Date().toISOString().slice(0,10)+".json";
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+async function importBackup(file){
+  const parsed=JSON.parse(await file.text());
+  if(parsed.app!=="nigakyo"||!parsed.data)throw new Error("니가교수 백업 파일이 아니야");
+  let n=0;
+  for(const k in parsed.data){if(k.startsWith("ng:")&&k!=="ng:key"&&k!=="ng:geminiKey"){LS.set(k,parsed.data[k]);n++;}}
+  return n;
+}
+
 /* ── 과목 색상 팔레트 ── */
 const SUBJ_COLORS=["#6C5CE7","#27C2A0","#FF6B8A","#FF8E72","#FFC24B","#4FACFE","#A29BFE","#55EFC4"];
 const defaultSubjects=()=>LS.get(SUBJS_KEY)||[
@@ -330,6 +349,12 @@ function loadCFG(){
   CFG.model=LS.get("ng:model")||"claude-sonnet-4-6";
   CFG.qmodel=LS.get("ng:qmodel")||"claude-haiku-4-5-20251001";
   CFG.geminiKey=LS.get("ng:geminiKey")||"";
+}
+// 이미지·PDF 인식용 모델: 가진 키 기준 (Claude 우선, 없으면 Gemini) — Gemini-only 유저도 동작
+function ocrModel(){
+  if(CFG.key)return"claude-sonnet-4-6";
+  if(CFG.geminiKey)return"gemini-2.0-flash";
+  return CFG.model;
 }
 const MODELS=[
   {id:"claude-sonnet-4-6",label:"Sonnet 4.6 · 추천"},
@@ -511,19 +536,19 @@ async function transcribeFile(base64,mediaType,kind){
     ?"이건 학습자가 S펜으로 쓴 한국어 답안이야. 수식·한자·영어 약어가 섞일 수 있어. 빠짐없이 읽어줘."
     :"이건 학습자의 한국어 공부 노트야. 제목·소제목·수식·목록이 섞여 있을 수 있어. 빠짐없이 읽어줘.";
   const fileBlock={type:"image",source:{type:"base64",media_type:mediaType||"image/png",data:base64}};
-  return await callClaude(sys,
+  return await callAI(sys,
     [fileBlock,{type:"text",text:hint+" 애매한 글자는 가장 가능성 높은 글자로 판단해. 텍스트만 출력."}],
-    false,{maxTok:1500,model:"claude-sonnet-4-6"});
+    false,{maxTok:1500,model:ocrModel()});
 }
 
 // PDF는 텍스트 변환 없이 직접 분석 — summary+concepts 한 번에 추출
 async function processPdf(base64){
   try{
-    const r=await callClaude(
+    const r=await callAI(
       "너는 학습 자료 분석 전문가야. PDF를 읽고 학습에 필요한 핵심 내용을 추출해.",
       [{type:"document",source:{type:"base64",media_type:"application/pdf",data:base64}},
        {type:"text",text:"이 PDF가 무엇을 가르치려는지 핵심 주제와 목적을 먼저 파악해. 그런 다음 그 목적에 맞는 핵심 개념을 추출해. 단순히 등장하는 단어가 아니라, 이 자료의 학습 목표를 대표하는 개념이어야 해. JSON만: {\"summary\":\"핵심 개념·공식·예시 압축 요약 (3000자 이내, 수식은 LaTeX 형식 그대로 유지)\",\"concepts\":[\"이 자료의 핵심 학습 목표에 해당하는 개념 10~20개 (짧은 명사구, 자료의 주제를 반영\"]}"}],
-      true,{maxTok:3000});
+      true,{maxTok:3000,model:ocrModel()});
     return r;
   }catch(e){
     console.warn("[processPdf] 실패:",e.message);
@@ -756,6 +781,16 @@ function Settings({onDone}){
   const MAX=STORAGE_CAP();
   const pct=Math.min(100,Math.round(storSize/MAX*100));
   const barColor=pct>=90?"var(--rose)":pct>=70?"var(--gold)":"var(--mint)";
+  const fileRef=useRef(null);
+  const [backupMsg,setBackupMsg]=useState("");
+  function doExport(){try{exportBackup();setBackupMsg("✓ 백업 파일을 내려받았어. 안전한 곳에 보관해줘!");}catch(e){setBackupMsg("내보내기 실패: "+e.message);}}
+  async function doImport(e){
+    const f=e.target.files&&e.target.files[0];if(!f)return;
+    if(!confirm("백업을 불러오면 같은 이름의 현재 자료에 덮어써져.\n계속할까?")){e.target.value="";return;}
+    try{const n=await importBackup(f);setBackupMsg("✓ 복원 완료 ("+n+"개 항목). 새로고침할게…");setTimeout(()=>location.reload(),900);}
+    catch(err){setBackupMsg("복원 실패: "+err.message);}
+    e.target.value="";
+  }
   return(
     <div className="card panel">
       <div className="eyebrow">설정</div>
@@ -766,6 +801,15 @@ function Settings({onDone}){
         </div>
         <div className="bar"><i style={{width:pct+"%",background:barColor}}/></div>
         {pct>=80&&<p className="err" style={{fontSize:12.5,marginTop:8}}>⚠️ 저장 공간이 부족해. 오래된 자료를 삭제해줘.</p>}
+      </div>
+      <div style={{borderTop:"1px solid var(--line)",paddingTop:14}}>
+        <div style={{fontSize:12.5,color:"var(--sub)",marginBottom:8}}>💾 데이터 백업 <span style={{fontSize:11}}>(자료·학습기록을 파일로 저장 / 복원. API 키는 제외)</span></div>
+        <div className="row">
+          <button className="btn gho sm" onClick={doExport}>⬇️ 내보내기</button>
+          <button className="btn gho sm" onClick={()=>fileRef.current&&fileRef.current.click()}>⬆️ 불러오기</button>
+          <input ref={fileRef} type="file" accept="application/json,.json" style={{display:"none"}} onChange={doImport}/>
+        </div>
+        {backupMsg&&<p style={{fontSize:12.5,marginTop:8,color:backupMsg.startsWith("✓")?"var(--mint)":"var(--rose)"}}>{backupMsg}</p>}
       </div>
       <KeyForm onSaved={onDone} cta="저장" showCancel onCancel={onDone}/>
     </div>
@@ -1786,7 +1830,7 @@ function Study({deck:initial,subjects}){
           "읽기 어렵거나 불명확한 글자·수식이 있으면 해당 영역의 대략적 좌표도 알려줘.\n\n"+
           "다음 형식으로만 출력:\nTEXT: 인식된 전체 텍스트\nUNCLEAR: 없음 (또는 불명확한 영역을 x,y,너비,높이 픽셀 단위로 — 여러 개면 | 로 구분)",
           [{type:"image",source:{type:"base64",media_type:"image/png",data:img}}],
-          false,{maxTok:400,model:"claude-sonnet-4-6"}
+          false,{maxTok:400,model:ocrModel()}
         );
         const ocr=parseOcrCheck(ocrRaw);
         if(ocr.unclear.length>0){

@@ -1830,7 +1830,7 @@ function Study({deck:initial,subjects}){
           "읽기 어렵거나 불명확한 글자·수식이 있으면 해당 영역의 대략적 좌표도 알려줘.\n\n"+
           "다음 형식으로만 출력:\nTEXT: 인식된 전체 텍스트\nUNCLEAR: 없음 (또는 불명확한 영역을 x,y,너비,높이 픽셀 단위로 — 여러 개면 | 로 구분)",
           [{type:"image",source:{type:"base64",media_type:"image/png",data:img}}],
-          false,{maxTok:400,model:ocrModel()}
+          false,{maxTok:400,model:ocrModel()},abortRef.current?.signal
         );
         const ocr=parseOcrCheck(ocrRaw);
         if(ocr.unclear.length>0){
@@ -1842,7 +1842,7 @@ function Study({deck:initial,subjects}){
           submitting.current=false;
           return;
         }
-      }catch(e){console.warn("[OCR check]",e.message);}
+      }catch(e){if(e.name==="AbortError"){submitting.current=false;return;}console.warn("[OCR check]",e.message);}
     }
     try{
       const userBlocks=[];
@@ -1860,7 +1860,7 @@ function Study({deck:initial,subjects}){
       userBlocks.push({type:"text",text:textParts.join("\n")});
       const gradingRaw=await callAI(
         "너는 학습 분석 튜터야. "+qtypeCtx+" 학습자 답안을 보고 '이 개념의 본질 대비 내 답의 갭'을 분석해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ 등)는 반드시 LaTeX로: 인라인 $...$, 블록 $$...$$. 유니코드 기호 직접 사용 금지. 다음 형식으로만 출력 (JSON·코드블록 없이):\nESSENCE: 이 질문이 진짜 요구하는 핵심 요소 1~3가지 (학습자가 반드시 알아야 할 것)\nGOT_IT: 내 답이 제대로 담은 부분 (인정해줄 것, 반말)\nGAP: 본질 대비 빠지거나 얕거나 비껴간 핵심 부분 (없으면 정확히 '없음')\nGAP_TYPE: 개념누락 / 이해얕음 / 핵심비껴감 / 표현부족 / 갭없음 중 정확히 하나\nDEPTH: 암기 수준 / 이해 수준 / 설명가능 수준 / 응용가능 수준 중 정확히 하나\nNEXT: 이 갭을 메우려면 구체적으로 뭘 보강해야 하는지 (반말, 1~2문장)\nVERDICT: correct 또는 partial 또는 incorrect (갭없음이면 correct, 핵심 갭이면 partial, 본질 전체 누락이면 incorrect)\nANSWER: 모범답안 3~5문장 (수식 LaTeX, 그래프 필요시 <svg> 태그 직접 — 코드블록 없이, width≤380 height≤260 viewBox 사용, 축=#221C39, 곡선=#6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8)\n\n자료:\n"+studyMat,
-        userBlocks,false,{cache:true,maxTok:2048});
+        userBlocks,false,{cache:true,maxTok:2048},abortRef.current?.signal);
       const r=parseGrading(gradingRaw);setEv(r);
       const v=["correct","partial","incorrect"].includes(r.verdict)?r.verdict:"partial";
       lastAnswerRef.current={answer:hasTxt?answer.trim():"[손글씨]",gap:r.gap||"",gapType:r.gap_type||""};
@@ -1882,7 +1882,7 @@ function Study({deck:initial,subjects}){
           setConcept(uc);setCount(n=>n+1);setPhase("result");
         }
       }
-    }catch(e){setPhase("answering");setSubmitErr("채점 실패: "+e.message);}
+    }catch(e){if(e.name==="AbortError")return;setPhase("answering");setSubmitErr("채점 실패: "+e.message);}
     finally{submitting.current=false;}
   }
 
@@ -1893,12 +1893,13 @@ function Study({deck:initial,subjects}){
       const raw=await callAI(
         "너는 소크라테스식 학습 튜터야. 학습자가 개념의 빠진 부분을 스스로 채울 수 있도록 후속 질문을 딱 하나만 만들어. 규칙: ①절대 정답·모범답안을 알려주지 말 것 ②발견된 갭(빠진 핵심)을 정확히 겨냥한 질문 ③'왜', '그렇다면', '어떤 경우에' 형식의 소크라테스식 ④반말, 친근하게 ⑤질문 한 문장만 출력, 설명·안내 없이\n\n자료:\n"+studyMat.slice(0,4000),
         "개념: "+concept.name+"\n원래 질문: "+q.question+"\n핵심 포인트: "+(q.key_points||[]).join(", ")+"\n발견된 갭: "+gap+"\n\n"+histTxt+"후속 질문만 출력:",
-        false,{maxTok:200,model:CFG.qmodel}
+        false,{maxTok:200,model:CFG.qmodel},abortRef.current?.signal
       );
       setFollowupQ((raw||"").trim());
       setFollowupHint("");setFollowupHintBusy(false);
       setPhase("followup");
     }catch(e){
+      if(e.name==="AbortError")return;
       setSubmitErr("후속 질문 생성 실패: "+e.message);
       setPhase("answering");
     }
@@ -1922,7 +1923,7 @@ function Study({deck:initial,subjects}){
       userBlocks.push({type:"text",text:textParts.join("\n")});
       const raw=await callAI(
         "너는 학습 분석 튜터야. 후속 질문에 대한 답변만 갭 분석해. 이 후속 질문이 묻는 부분만 평가해 (전체 모범답안 기준 아님). 다음 형식으로만 출력:\nESSENCE: 이 후속 질문이 묻는 핵심\nGOT_IT: 맞게 표현한 부분 (반말)\nGAP: 여전히 부족한 부분 (없으면 정확히 '없음')\nGAP_TYPE: 개념누락 / 이해얕음 / 핵심비껴감 / 표현부족 / 갭없음 중 하나\nDEPTH: 암기 수준 / 이해 수준 / 설명가능 수준 / 응용가능 수준 중 하나\nNEXT: 1문장 (반말)\nVERDICT: correct 또는 partial 또는 incorrect\nANSWER: \n\n자료:\n"+studyMat,
-        userBlocks,false,{cache:true,maxTok:800}
+        userBlocks,false,{cache:true,maxTok:800},abortRef.current?.signal
       );
       const r=parseGrading(raw);
       setFollowupEv(r);
@@ -1939,7 +1940,7 @@ function Study({deck:initial,subjects}){
       setPhase("result");
       setLeftPage(r.verdict==="correct"?0:1);
       setTimeout(()=>padRef.current?.forceColor(PEN_COLORS[2]),50);
-    }catch(e){setSubmitErr("채점 실패: "+e.message);}
+    }catch(e){if(e.name==="AbortError")return;setSubmitErr("채점 실패: "+e.message);}
     finally{followupSubmitting.current=false;}
     setFollowupBusy(false);
   }
@@ -1956,10 +1957,10 @@ function Study({deck:initial,subjects}){
       const raw=await callAI(
         "수식 유도 튜터. 학습자가 한 단계씩 공식을 직접 유도할 수 있도록 계획을 세워. 각 단계는 한 줄~두 줄 수식 하나로 분리해. 수식은 LaTeX($...$).",
         "개념: "+concept.name+"\n자료:\n"+studyMat.slice(0,4000)+"\n\n다음 형식으로만 출력:\nSTEPS: 단계수(3~6)\nSTART: 시작 안내 문장\nHINT1: 1단계 힌트\nHINT2: 2단계 힌트\n... (단계수만큼)",
-        false,{maxTok:700,model:CFG.qmodel});
+        false,{maxTok:700,model:CFG.qmodel},abortRef.current?.signal);
       setDerivePlan(parseDerivePlan(raw));
       setPhase("derive_step");
-    }catch(e){setPhase("answering");setSubmitErr("유도 시작 실패: "+e.message);}
+    }catch(e){if(e.name==="AbortError")return;setPhase("answering");setSubmitErr("유도 시작 실패: "+e.message);}
   }
 
   async function submitDeriveStep(){
@@ -1980,7 +1981,7 @@ function Study({deck:initial,subjects}){
     try{
       const raw=await callAI(
         "수식 유도 단계 평가자. 표기가 완벽하지 않아도 수학적 방향이 맞으면 CORRECT: yes. 관대하게 평가해.",
-        userBlocks,false,{maxTok:350});
+        userBlocks,false,{maxTok:350},abortRef.current?.signal);
       const res=parseDeriveCheck(raw);
       setDeriveFeedback(res.feedback);
       if(res.correct){
@@ -1996,7 +1997,7 @@ function Study({deck:initial,subjects}){
           setDeriveIdx(deriveIdx+1);setDeriveFeedback("");
         }
       }
-    }catch(e){setSubmitErr("평가 실패: "+e.message);}
+    }catch(e){if(e.name==="AbortError")return;setSubmitErr("평가 실패: "+e.message);}
     setDeriveChecking(false);
   }
 
@@ -2013,9 +2014,9 @@ function Study({deck:initial,subjects}){
       const r=await callAI(
         "너는 친절한 튜터야. 학습자가 이 개념을 전혀 모르니 처음 배우는 사람에게 직관적으로(비유·예시·왜 중요한지) 반말로 설명해줘.\n\n출력 형식 규칙:\n① 제목은 ## 소제목은 ### ② 핵심 용어나 강조는 **굵게** ③ 목록은 - 기호 ④ 수식은 LaTeX($...$, $$...$$) ⑤ >> --- === 같은 ASCII 기호 금지 ⑥ 코드·XML·SVG 출력 금지\n\n자료:\n"+studyMat,
         "개념: "+concept.name+(q?"\n원래 질문: "+q.question:""),
-        false,{cache:true,maxTok:1400});
+        false,{cache:true,maxTok:1400},abortRef.current?.signal);
       setDontknow(r);
-    }catch(e){setDontknow("설명 불러오기 실패: "+e.message);}
+    }catch(e){if(e.name==="AbortError")return;setDontknow("설명 불러오기 실패: "+e.message);}
     setDontknowBusy(false);
   }
 
@@ -2027,9 +2028,9 @@ function Study({deck:initial,subjects}){
       const r=await callAI(
         "너는 친절한 튜터야. 학습자가 후속 질문에 막혔어. 반말로 핵심만 짧게 (3~5문장) 힌트를 줘. 정답을 직접 말하지 말고 생각할 수 있게 유도해줘.\n\n출력 형식: ## 소제목 없이, **굵게** 강조만 허용, 수식은 LaTeX($...$), >> --- ASCII 기호 금지.",
         "개념: "+concept.name+"\n후속 질문: "+followupQ+(gap?"\n빠진 부분: "+gap:""),
-        false,{maxTok:400,cache:true});
+        false,{maxTok:400,cache:true},abortRef.current?.signal);
       setFollowupHint(r);
-    }catch(e){setFollowupHint("힌트 불러오기 실패: "+e.message);}
+    }catch(e){if(e.name==="AbortError")return;setFollowupHint("힌트 불러오기 실패: "+e.message);}
     setFollowupHintBusy(false);
   }
 
@@ -2038,9 +2039,9 @@ function Study({deck:initial,subjects}){
     try{const r=await callAI(
       "너는 친절한 튜터야. 자료에 근거해 더 깊이 직관적으로(비유·예시·왜) 반말로 설명해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ × · 등)는 반드시 모두 LaTeX로: 인라인은 $...$, 블록은 $$..$$. 유니코드 기호 직접 사용 금지. 그래프·곡선·다이어그램이 이해에 도움이 되면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, font-size 11~13, 색상: 축선=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, 균형점=원형 #FFC24B, 배경=#FFFDF8).\n\n자료:\n"+studyMat,
       "개념: "+concept.name+"\n질문: "+q.question+"\n모범답안: "+(ev?.model_answer||""),
-      false,{cache:true,maxTok:1200});
+      false,{cache:true,maxTok:1200},abortRef.current?.signal);
       setDeeper(r);}
-    catch(e){setDeeper("실패: "+e.message);}
+    catch(e){if(e.name==="AbortError")return;setDeeper("실패: "+e.message);}
     setDeepBusy(false);
   }
 
@@ -2063,9 +2064,9 @@ function Study({deck:initial,subjects}){
     try{
       const r=await callAI(
         "친절한 튜터. 첫 글자부터 바로 설명. 수식은 LaTeX($...$). 반말.",
-        userBlocks,false,{maxTok:1200,cache:true});
+        userBlocks,false,{maxTok:1200,cache:true},abortRef.current?.signal);
       setAnnotAnswer(r);
-    }catch(e){setAnnotAnswer("실패: "+e.message);}
+    }catch(e){if(e.name==="AbortError")return;setAnnotAnswer("실패: "+e.message);}
     setAnnotBusy(false);
   }
 

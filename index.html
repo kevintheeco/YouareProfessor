@@ -561,6 +561,13 @@ function App(){
 
   function openStudy(id){const d=LS.get(dk(id));if(d){setActiveDeck(d);setView("study");}}
   function openNotes(id){const d=LS.get(dk(id));if(d){setNoteDeck(d);setView("notes");}}
+  function studyWeak(deck){
+    const fresh=LS.get(dk(deck.id))||deck;
+    const weakConcepts=(fresh.concepts||[]).filter(c=>(c.box||1)<=3||c.lapses>0);
+    if(!weakConcepts.length){alert("아직 약점 개념이 없어! 전체 공부부터 해봐 💪");return;}
+    setActiveDeck({...fresh,concepts:weakConcepts});
+    setView("study");
+  }
 
   function saveSubjects(s){setSubjects(s);LS.set(SUBJS_KEY,s);}
 
@@ -588,7 +595,7 @@ function App(){
       )}
       {view==="add"&&<AddMaterial subjects={subjects} onSave={saveSubjects} onDone={()=>{refresh();setView("home");}} onCancel={()=>setView("home")}/>}
       {view==="study"&&activeDeck&&<Study deck={activeDeck} subjects={subjects}/>}
-      {view==="notes"&&noteDeck&&<WeakNotes deck={noteDeck} onBack={()=>setView("home")}/>}
+      {view==="notes"&&noteDeck&&<WeakNotes deck={noteDeck} onBack={()=>setView("home")} onStudy={studyWeak}/>}
 
       <div className="footer">키와 자료는 이 기기에만 저장 · {MODELS.find(m=>m.id===CFG.model)?.label.split(" ·")[0]||"Claude"}</div>
     </>
@@ -1450,19 +1457,23 @@ function DepthGauge({depth}){
 }
 
 /* ── 오답 노트 ── */
-function WeakNotes({deck,onBack}){
+function WeakNotes({deck,onBack,onStudy}){
   const concepts=deck.concepts||[];
   const weak=concepts.filter(c=>(c.box||1)<=3||c.lapses>0||c.lastGap)
     .sort((a,b)=>(a.box||1)-(b.box||1)||(b.lapses||0)-(a.lapses||0));
   const noData=weak.every(c=>!c.lastGap&&!c.lastAnswer);
+  const studyableCount=(deck.concepts||[]).filter(c=>(c.box||1)<=3||c.lapses>0).length;
   return(
     <section className="card panel">
       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <button className="btn gho sm" onClick={onBack}>← 뒤로</button>
-        <div>
+        <div style={{flex:1}}>
           <div className="eyebrow">오답 노트</div>
           <div style={{fontSize:14,fontWeight:700,color:"var(--ink)"}}>{deck.name}</div>
         </div>
+        {onStudy&&<button className="btn pri sm" onClick={()=>onStudy(deck)} style={{flexShrink:0}}>
+          💪 약점만 공부하기 {studyableCount>0&&<span style={{background:"rgba(255,255,255,.35)",borderRadius:10,padding:"1px 6px",marginLeft:4,fontSize:11}}>{studyableCount}</span>}
+        </button>}
       </div>
       {weak.length===0?(
         <div className="empty">아직 틀린 개념이 없어! 공부를 시작해봐 📚</div>
@@ -1816,7 +1827,7 @@ function Study({deck:initial,subjects}){
     setPhase("dontknow");setDontknow("");setDontknowBusy(true);
     try{
       const r=await callAI(
-        "너는 친절한 튜터야. 학습자가 이 개념을 전혀 모르니 처음 배우는 사람에게 직관적으로(비유·예시·왜 중요한지) 반말로 설명해줘. 코드·XML·SVG 출력 금지. 수식은 LaTeX($...$, $$...$$).\n\n자료:\n"+studyMat,
+        "너는 친절한 튜터야. 학습자가 이 개념을 전혀 모르니 처음 배우는 사람에게 직관적으로(비유·예시·왜 중요한지) 반말로 설명해줘.\n\n출력 형식 규칙:\n① 제목은 ## 소제목은 ### ② 핵심 용어나 강조는 **굵게** ③ 목록은 - 기호 ④ 수식은 LaTeX($...$, $$...$$) ⑤ >> --- === 같은 ASCII 기호 금지 ⑥ 코드·XML·SVG 출력 금지\n\n자료:\n"+studyMat,
         "개념: "+concept.name+(q?"\n원래 질문: "+q.question:""),
         false,{cache:true,maxTok:1400});
       setDontknow(r);
@@ -2385,50 +2396,102 @@ function sanitizeSvg(s){
    1단계: <svg>…</svg> 블록 → .graph-block 렌더
    2단계: 나머지 텍스트 → $…$/$$…$$ KaTeX 렌더
 ── */
-function MathText({text,tag:Tag="p",className,style}){
-  if(!text)return <Tag className={className} style={style}/>;
+function _renderLatexInline(text,kp){
+  if(!text)return[];
   const nodes=[];
-  // HTML 주석 제거 + 코드펜스 안 SVG 추출
-  var cleaned=text
-    .replace(/<!--[\s\S]*?-->/g,"")
-    .replace(/```[\w]*\s*(<svg[\s\S]*?<\/svg>)\s*```/gi,"$1");
-  var svgParts=cleaned.split(/(<svg[\s\S]*?<\/svg>)/i);
-  svgParts.forEach(function(seg,si){
-    if(si%2===1){
-      nodes.push(React.createElement("div",{
-        key:"svg"+si,className:"graph-block",
-        dangerouslySetInnerHTML:{__html:sanitizeSvg(seg)}
-      }));
-      return;
+  const parts=text.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/);
+  parts.forEach((part,i)=>{
+    if(!part)return;
+    if(i%2===1){
+      const disp=part.charAt(1)==='$';
+      const latex=part.slice(disp?2:1,disp?-2:-1).trim();
+      try{
+        const html=window.katex?.renderToString(latex,{displayMode:disp,throwOnError:false,strict:false});
+        if(html){nodes.push(React.createElement('span',{key:kp+i,style:disp?{display:"block",textAlign:"center",overflowX:"auto",margin:"8px 0"}:undefined,dangerouslySetInnerHTML:{__html:html}}));return;}
+      }catch(e){console.warn("KaTeX:",e);}
+      nodes.push(React.createElement('span',{key:kp+i},part));
+    }else if(part){
+      nodes.push(part);
     }
-    var parts=seg.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/);
-    parts.forEach(function(part,i){
-      var key=si+"_"+i;
-      if(i%2===0){
-        var lines=part.split("\n");
-        lines.forEach(function(line,j){
-          if(line)nodes.push(line);
-          if(j<lines.length-1)nodes.push(React.createElement("br",{key:"br"+key+"_"+j}));
-        });
-      }else{
-        var disp=part.charAt(1)==="$";
-        var latex=part.slice(disp?2:1,disp?-2:-1).trim();
-        if(window.katex){
-          try{
-            var html=window.katex.renderToString(latex,{displayMode:disp,throwOnError:false,strict:false});
-            nodes.push(React.createElement("span",{
-              key:"k"+key,
-              style:disp?{display:"block",textAlign:"center",overflowX:"auto",margin:"10px 0"}:undefined,
-              dangerouslySetInnerHTML:{__html:html}
-            }));
-            return;
-          }catch(e){console.warn("KaTeX:",latex,e);}
-        }
-        nodes.push(React.createElement("span",{key:"k"+key},part));
-      }
-    });
   });
-  return React.createElement(Tag,{className:className,style:style},nodes);
+  return nodes;
+}
+function _renderInline(text,kp){
+  if(!text)return[];
+  const nodes=[];
+  const segs=text.split(/(\*\*[^*\n]+?\*\*|\*[^*\n]+?\*|`[^`\n]+?`)/);
+  segs.forEach((seg,i)=>{
+    if(!seg)return;
+    const k=kp+'_i'+i;
+    if(seg.startsWith('**')&&seg.endsWith('**')&&seg.length>4)
+      nodes.push(React.createElement('strong',{key:k},..._renderLatexInline(seg.slice(2,-2),k)));
+    else if(seg.startsWith('*')&&seg.endsWith('*')&&seg.length>2)
+      nodes.push(React.createElement('em',{key:k},..._renderLatexInline(seg.slice(1,-1),k)));
+    else if(seg.startsWith('`')&&seg.endsWith('`')&&seg.length>2)
+      nodes.push(React.createElement('code',{key:k,style:{background:'#F0EDFF',borderRadius:4,padding:'0 5px',fontSize:'.88em',color:"var(--pri-d)"}},seg.slice(1,-1)));
+    else
+      nodes.push(..._renderLatexInline(seg,k));
+  });
+  return nodes;
+}
+function MathText({text,tag:Tag="p",className,style}){
+  if(!text)return React.createElement(Tag,{className,style});
+  const cleaned=text.replace(/<!--[\s\S]*?-->/g,"").replace(/```[\w]*\s*(<svg[\s\S]*?<\/svg>)\s*```/gi,"$1");
+  if(Tag==="span")return React.createElement("span",{className,style},..._renderInline(cleaned,"s"));
+  const svgSegs=cleaned.split(/(<svg[\s\S]*?<\/svg>)/i);
+  const nodes=[];let nk=0;
+  svgSegs.forEach((seg,si)=>{
+    if(si%2===1){nodes.push(React.createElement("div",{key:"svg"+si,className:"graph-block",dangerouslySetInnerHTML:{__html:sanitizeSvg(seg)}}));return;}
+    const lines=seg.split("\n");let i=0;
+    while(i<lines.length){
+      const line=lines[i];const k=si+"_"+(nk++);
+      if(/^###\s/.test(line)){
+        nodes.push(React.createElement("div",{key:k,style:{fontFamily:"'Jua',sans-serif",fontSize:13.5,color:"var(--pri-d)",marginTop:10,marginBottom:2}},..._renderInline(line.slice(4),k)));
+        i++;continue;
+      }
+      if(/^##\s/.test(line)){
+        nodes.push(React.createElement("div",{key:k,style:{fontFamily:"'Jua',sans-serif",fontSize:15,color:"var(--ink)",marginTop:14,marginBottom:5,paddingBottom:4,borderBottom:"1.5px solid var(--line)"}},..._renderInline(line.slice(3),k)));
+        i++;continue;
+      }
+      if(/^---+$/.test(line.trim())){
+        nodes.push(React.createElement("hr",{key:k,style:{border:"none",borderTop:"1px solid var(--line)",margin:"8px 0"}}));
+        i++;continue;
+      }
+      if(/^[-•]\s/.test(line)){
+        const items=[];
+        while(i<lines.length&&/^[-•]\s/.test(lines[i])){items.push(lines[i].replace(/^[-•]\s/,""));i++;}
+        nodes.push(React.createElement("div",{key:k,style:{display:"flex",flexDirection:"column",gap:3,margin:"4px 0 8px"}},
+          items.map((item,idx)=>React.createElement("div",{key:idx,style:{display:"flex",gap:7,alignItems:"flex-start"}},
+            React.createElement("span",{style:{color:"var(--pri)",fontWeight:900,flexShrink:0,lineHeight:1.85,fontSize:11}},"•"),
+            React.createElement("span",{style:{flex:1,lineHeight:1.78}},..._renderInline(item,k+"b"+idx))
+          ))
+        ));
+        continue;
+      }
+      if(/^\d+\.\s/.test(line)){
+        const items=[];let n=1;
+        while(i<lines.length&&/^\d+\.\s/.test(lines[i])){items.push({n,t:lines[i].replace(/^\d+\.\s/,"")});n++;i++;}
+        nodes.push(React.createElement("div",{key:k,style:{display:"flex",flexDirection:"column",gap:3,margin:"4px 0 8px"}},
+          items.map((item,idx)=>React.createElement("div",{key:idx,style:{display:"flex",gap:7,alignItems:"flex-start"}},
+            React.createElement("span",{style:{color:"var(--pri)",fontWeight:700,flexShrink:0,lineHeight:1.85,fontSize:12,minWidth:16,textAlign:"right"}},item.n+"."),
+            React.createElement("span",{style:{flex:1,lineHeight:1.78}},..._renderInline(item.t,k+"n"+idx))
+          ))
+        ));
+        continue;
+      }
+      if(/^>\s/.test(line)){
+        nodes.push(React.createElement("div",{key:k,style:{borderLeft:"3px solid var(--pri)",background:"var(--pri-s)",borderRadius:"0 8px 8px 0",padding:"6px 12px",margin:"4px 0",lineHeight:1.75,color:"var(--ink)"}},..._renderInline(line.slice(2),k)));
+        i++;continue;
+      }
+      if(!line.trim()){
+        if(nodes.length>0)nodes.push(React.createElement("div",{key:k,style:{height:5}}));
+        i++;continue;
+      }
+      nodes.push(React.createElement("div",{key:k,style:{lineHeight:1.85}},..._renderInline(line,k)));
+      i++;
+    }
+  });
+  return React.createElement("div",{className,style},...nodes);
 }
 
 function Meter({box}){

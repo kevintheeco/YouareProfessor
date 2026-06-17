@@ -153,9 +153,9 @@ canvas.pad.eraser{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org
 .ans-layout{display:grid;grid-template-columns:2fr 3fr;gap:16px;align-items:start}
 .ans-layout .pad{height:calc(100vh - 160px);min-height:560px}
 /* 오른쪽 노트 컬럼: 화면에 고정(sticky)돼 해설(왼쪽)을 스크롤해도 내 답이 계속 보임 + 자체 스크롤 */
-.ans-layout .notecol{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 90px);overflow-y:auto}
-/* 노트 안 버튼 줄(제출 등)은 스크롤과 독립적으로 항상 맨 아래 고정 */
-.ans-layout .notecol .row{position:sticky;bottom:0;margin-top:auto;background:var(--card);padding:9px 0 1px;border-top:1px solid var(--line);z-index:2}
+.ans-layout .notecol{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 90px);overflow-y:auto;overscroll-behavior:contain}
+/* 긴 캔버스가 가리는 제출 줄만 하단 고정(.note-foot). margin-top:auto 금지 — 내부 스크롤을 막음 */
+.ans-layout .notecol .note-foot{position:sticky;bottom:0;background:var(--card);padding:9px 0 1px;border-top:1px solid var(--line);z-index:2}
 .crow{display:flex;align-items:center;gap:7px;padding:5px 9px;border-radius:10px;transition:background .15s;cursor:pointer;user-select:none}
 .crow.active{background:var(--pri-s)}
 .crow .cn{font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
@@ -392,7 +392,8 @@ const RICH_FMT="\n\n[출력 형식 규칙 — 가독성 최우선, 반드시 지
 "2-1) 수식 안에서 퍼센트는 반드시 \\% 로 써라(그냥 %는 LaTeX 주석으로 먹혀 식 전체가 깨짐). 예: 인플레이션 목표 $\\pi^*=2\\%$. 인라인 $...$ 안에는 줄바꿈 넣지 말고, 길거나 여러 줄이면 $$...$$ 블록(여러 줄은 \\begin{aligned}...\\end{aligned})으로.\n"+
 "3) 비교·수치·항목 정리는 GitHub 마크다운 표로:\n| 항목 | 값 |\n| --- | --- |\n| 예 | 1 |\n표 앞뒤에 빈 줄을 넣고, HTML <table>은 쓰지 말 것.\n"+
 "4) 그래프·도식이 이해에 도움되면 <svg>를 코드블록 없이 직접, 아끼지 말고 그려(필요하면 여러 개): viewBox 사용, width≤520 height≤380. 축마다 라벨(예: 가로 수량 Q·실질소득 Y, 세로 가격 P·실질이자율 r), 곡선마다 라벨, 교점(균형점)은 점+좌표/값 표시, 곡선 이동·변화는 '이동 전(점선·회색) → 이동 후(실선)' + 방향 화살표로. 축선=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, 글자 11~13px, 배경 #FFFDF8.\n"+
-"4-1) 특히 경제학: 그래프로 표현되는 개념은 글로만 때우지 말고 반드시 그려라(수요·공급, 한계비용·평균비용 곡선, IS곡선, LM·MP곡선, AD–AS, 필립스곡선, IS–MP에서 AD 도출 등). 여러 곡선이 얽힌 모형은 서로 '유기적으로 연결'되게 그려라 — 같은 축·같은 균형점을 정렬하거나, 패널을 세로로 쌓아 한 패널의 균형값(예: r* 또는 Y*)이 다음 패널의 입력이 되도록 점선 보조선으로 이어서, 인과 흐름이 한눈에 보이게.";
+"4-1) 특히 경제학: 그래프로 표현되는 개념은 글로만 때우지 말고 반드시 그려라(수요·공급, 한계비용·평균비용 곡선, IS곡선, LM·MP곡선, AD–AS, 필립스곡선, IS–MP에서 AD 도출 등). 여러 곡선이 얽힌 모형은 서로 '유기적으로 연결'되게 그려라 — 같은 축·같은 균형점을 정렬하거나, 패널을 세로로 쌓아 한 패널의 균형값(예: r* 또는 Y*)이 다음 패널의 입력이 되도록 점선 보조선으로 이어서, 인과 흐름이 한눈에 보이게.\n"+
+"4-2) SVG는 간결하게 그려라(불필요한 점·격자·장식 최소화) — 그래야 안 잘린다. 그리고 모든 <svg>는 반드시 </svg>로 닫아라(닫히지 않으면 그래프가 안 보임).";
 // 이미지·PDF 인식용 모델: 가진 키 기준 (Claude 우선, 없으면 Gemini) — Gemini-only 유저도 동작
 function ocrModel(){
   if(CFG.key)return"claude-sonnet-4-6";
@@ -2227,7 +2228,7 @@ function Study({deck:initial,subjects}){
       userBlocks.push({type:"text",text:textParts.join("\n")});
       const gradingRaw=await callAI(
         "너는 학습 분석 튜터야. "+qtypeCtx+" 학습자 답안을 보고 '이 개념의 본질 대비 내 답의 갭'을 분석해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ 등)는 반드시 LaTeX로: 인라인 $...$, 블록 $$...$$. 유니코드 기호 직접 사용 금지. 다음 형식으로만 출력 (JSON·코드블록 없이):\nESSENCE: 이 질문이 진짜 요구하는 핵심 요소 1~3가지 (학습자가 반드시 알아야 할 것)\nGOT_IT: 내 답이 제대로 담은 부분 (인정해줄 것, 반말)\nGAP: 본질 대비 빠지거나 얕거나 비껴간 핵심 부분 (없으면 정확히 '없음')\nGAP_TYPE: 개념누락 / 이해얕음 / 핵심비껴감 / 표현부족 / 갭없음 중 정확히 하나\nDEPTH: 암기 수준 / 이해 수준 / 설명가능 수준 / 응용가능 수준 중 정확히 하나\nNEXT: 이 갭을 메우려면 구체적으로 뭘 보강해야 하는지 (반말, 1~2문장)\nVERDICT: correct 또는 partial 또는 incorrect (갭없음이면 correct, 핵심 갭이면 partial, 본질 전체 누락이면 incorrect)\nANSWER: 모범답안 3~5문장 (수식 LaTeX, 그래프 필요시 <svg> 태그 직접)"+RICH_FMT+"\n\n자료:\n"+studyMat,
-        userBlocks,false,{cache:true,maxTok:2048,lang:studyLang},abortRef.current?.signal);
+        userBlocks,false,{cache:true,maxTok:3500,lang:studyLang},abortRef.current?.signal);
       const r=parseGrading(gradingRaw);setEv(r);
       const v=["correct","partial","incorrect"].includes(r.verdict)?r.verdict:"partial";
       lastAnswerRef.current={answer:hasTxt?answer.trim():"[손글씨]",gap:r.gap||"",gapType:r.gap_type||""};
@@ -2398,7 +2399,7 @@ function Study({deck:initial,subjects}){
       const r=await callAI(
         "너는 친절한 튜터야. 학습자가 이 개념을 전혀 모르니 처음 배우는 사람에게 직관적으로(비유·예시·왜 중요한지) 반말로 설명해줘.\n\n출력 형식 규칙:\n① 제목은 ## 소제목은 ### ② 핵심 용어나 강조는 **굵게** ③ 목록은 - 기호 ④ 수식은 LaTeX($...$, $$...$$) ⑤ >> === 같은 ASCII 기호 금지 ⑥ 이해에 도움되면 표·그래프(<svg>) 적극 사용"+RICH_FMT+"\n\n자료:\n"+studyMat,
         "개념: "+concept.name+(q?"\n원래 질문: "+q.question:""),
-        false,{cache:true,maxTok:1400,lang:studyLang},abortRef.current?.signal);
+        false,{cache:true,maxTok:1900,lang:studyLang},abortRef.current?.signal);
       setDontknow(r);
     }catch(e){if(e.name==="AbortError")return;setDontknow("설명 불러오기 실패: "+e.message);}
     setDontknowBusy(false);
@@ -2423,7 +2424,7 @@ function Study({deck:initial,subjects}){
     try{const r=await callAI(
       "너는 친절한 튜터야. 자료에 근거해 더 깊이 직관적으로(비유·예시·왜) 반말로 설명해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ × · 등)는 반드시 모두 LaTeX로: 인라인은 $...$, 블록은 $$..$$. 유니코드 기호 직접 사용 금지. 그래프·곡선·다이어그램이 이해에 도움이 되면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, font-size 11~13, 색상: 축선=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, 균형점=원형 #FFC24B, 배경=#FFFDF8)."+RICH_FMT+"\n\n자료:\n"+studyMat,
       "개념: "+concept.name+"\n질문: "+q.question+"\n모범답안: "+(ev?.model_answer||""),
-      false,{cache:true,maxTok:1200,lang:studyLang},abortRef.current?.signal);
+      false,{cache:true,maxTok:1900,lang:studyLang},abortRef.current?.signal);
       setDeeper(r);}
     catch(e){if(e.name==="AbortError")return;setDeeper("실패: "+e.message);}
     setDeepBusy(false);
@@ -2795,7 +2796,7 @@ function Study({deck:initial,subjects}){
                         <MathText text={derivePlan.hints[deriveIdx]} tag="span"/>
                       </div>
                     )}
-                    <div className="row">
+                    <div className="row note-foot">
                       <button className="btn pri" onClick={submitDeriveStep} disabled={deriveChecking}>
                         {deriveChecking?T("확인 중…","Checking…"):T("이 단계 맞아? ✓","Is this step right? ✓")}
                       </button>
@@ -2956,7 +2957,7 @@ function Study({deck:initial,subjects}){
                         onClick={startDerive}>{T("✏️ 직접 유도해볼게","✏️ Derive it myself")}</button>
                     )}
                     {submitErr&&<div className="err">{submitErr}</div>}
-                    <div className="row">
+                    <div className="row note-foot">
                       <button className="btn pri" onClick={()=>submit()} disabled={phase==="grading"}>{T("제출 ✓","Submit ✓")}</button>
                       <button className="btn gho" onClick={handleDontKnow} disabled={phase==="grading"}>{T("몰라요 😅","Don't know 😅")}</button>
                       <button className="btn gho" onClick={skipConcept} disabled={phase==="grading"} title={T("이 개념은 오늘 패스 (레벨 안 깎임)","Skip this concept today (level kept)")}>{T("패스 ⏭️","Skip ⏭️")}</button>
@@ -2966,7 +2967,7 @@ function Study({deck:initial,subjects}){
                 {phase==="followup"&&(
                   <>
                     {submitErr&&<div className="err">{submitErr}</div>}
-                    <div className="row">
+                    <div className="row note-foot">
                       <button className="btn pri" onClick={submitFollowup} disabled={followupBusy}>
                         {followupBusy?T("채점 중…","Grading…"):T("보충 답변 제출 ✓","Submit follow-up ✓")}
                       </button>
@@ -3126,6 +3127,7 @@ function MathText({text,tag:Tag="p",className,style}){
   const cleaned=String(text)
     .replace(/<!--[\s\S]*?-->/g,"")
     .replace(/```[\w]*\s*(<svg[\s\S]*?<\/svg>)\s*```/gi,"$1")
+    .replace(/<svg(?![\s\S]*<\/svg>)[\s\S]*$/i,"")                      // 닫히지 않은(잘린) svg는 통째로 제거 — 날것 노출 방지
     .replace(/\\\[([\s\S]+?)\\\]/g,(m,p)=>"\n\n$$"+p.trim()+"$$\n\n")   // \[..\] → $$..$$
     .replace(/\\\(([\s\S]+?)\\\)/g,(m,p)=>"$"+p.trim()+"$");            // \(..\) → $..$
   if(Tag==="span")return React.createElement("span",{className,style},..._renderInline(cleaned,"s"));

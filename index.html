@@ -1235,7 +1235,7 @@ const QuestionPad=React.forwardRef(function QuestionPad({disabled,tool="pen"},fw
 const PEN_COLORS=["#221C39","#2563EB","#DC2626"];
 const PEN_LABELS=["검정","파랑","빨강"];
 
-const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penOnlyDefault=false},fwdRef){
+const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penOnlyDefault=false,highlights,highlightSize},fwdRef){
   const canvasRef=useRef(null);
   const strokes=useRef([]);
   const drawing=useRef(false);
@@ -1252,6 +1252,8 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     hasStrokes:()=>strokes.current.length>0,
     clear:()=>{strokes.current=[];redraw();setHasInk(false);setPadErr("");},
     forceColor:(c)=>{setColor(c);setTool("pen");},
+    setEraser:()=>setTool("eraser"),
+    setPen:()=>setTool("pen"),
     getSize:()=>canvasRef.current?{w:canvasRef.current.width,h:canvasRef.current.height}:{w:800,h:680},
   }));
 
@@ -1383,11 +1385,24 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
           ✒️ {penOnly?"펜 전용":"터치"}
         </button>
       </div>
-      <canvas ref={canvasRef} className={"pad"+(tool==="eraser"?" eraser":"")}
-        style={disabled?{opacity:.55,pointerEvents:"none"}:undefined}
-        onPointerDown={down} onPointerMove={move} onPointerUp={up}
-        onPointerLeave={up} onPointerCancel={cancel}
-        onContextMenu={e=>{e.preventDefault();const p=pt(e);eraseAt(p.x,p.y);}}/>
+      <div style={{position:"relative",width:"100%"}}>
+        <canvas ref={canvasRef} className={"pad"+(tool==="eraser"?" eraser":"")}
+          style={disabled?{opacity:.55,pointerEvents:"none"}:undefined}
+          onPointerDown={down} onPointerMove={move} onPointerUp={up}
+          onPointerLeave={up} onPointerCancel={cancel}
+          onContextMenu={e=>{e.preventDefault();const p=pt(e);eraseAt(p.x,p.y);}}/>
+        {highlights&&highlights.length>0&&highlightSize&&highlights.map((h,i)=>(
+          <div key={i} style={{position:"absolute",
+            left:(h.x/highlightSize.w*100)+"%",top:(h.y/highlightSize.h*100)+"%",
+            width:(h.w/highlightSize.w*100)+"%",height:(h.h/highlightSize.h*100)+"%",
+            border:"2.5px solid var(--rose)",borderRadius:4,
+            background:"rgba(255,107,138,0.16)",boxShadow:"0 0 0 1px rgba(255,255,255,.6)",
+            pointerEvents:"none",boxSizing:"border-box"}}>
+            <span style={{position:"absolute",top:-9,left:-7,fontSize:11,background:"var(--rose)",color:"#fff",
+              borderRadius:"50%",width:16,height:16,lineHeight:"16px",textAlign:"center",fontWeight:700}}>?</span>
+          </div>
+        ))}
+      </div>
       {!hideOcr&&(
         <div className="pen-bottom">
           <span className="ph">S펜이나 손가락으로 써봐</span>
@@ -1933,36 +1948,34 @@ function Study({deck:initial,subjects}){
     return()=>{clearInterval(id);setGradeProg(100);setTimeout(()=>setGradeProg(0),450);};
   },[phase,followupBusy]);
 
-  async function submit(){
-    if(phase!=="answering"&&phase!=="ocr_check")return;
+  async function submit(force){
+    if(phase!=="answering")return;
     if(submitting.current)return;
     submitting.current=true;
     const hasInk=padRef.current?.hasStrokes();
     const hasTxt=answer.trim().length>0;
-    const hasOcrImg=phase==="ocr_check"&&!!ocrImgRef.current;
-    if(!hasInk&&!hasTxt&&!hasOcrImg){submitting.current=false;setSubmitErr("노트에 써보거나 텍스트로 답을 입력해봐!");return;}
-    // ocr_check 단계에서 "그냥 채점해줘" 누르면 저장된 img 재사용
-    const img=phase==="ocr_check"?ocrImgRef.current:(hasInk?padRef.current.getImageBase64():null);
-    setPhase("grading");setSubmitErr("");setOcrHighlights([]);setOcrImg(null);
+    if(!hasInk&&!hasTxt){submitting.current=false;setSubmitErr("노트에 써보거나 텍스트로 답을 입력해봐!");return;}
+    const img=hasInk?padRef.current.getImageBase64():null;
+    setPhase("grading");setSubmitErr("");setOcrHighlights([]);
 
-    // ── OCR 사전 체크 (answering 단계 + 손글씨 있을 때만) ──
-    if(phase==="answering"&&img){
+    // ── OCR 사전 체크 (손글씨 있을 때만, '그냥 제출'이면 건너뜀) ──
+    if(img&&!force){
       const sz=padRef.current?.getSize()||{w:800,h:680};
       try{
         const ocrRaw=await callAI(
-          "너는 손글씨 OCR 전문가야. 이 학습 답안을 읽어줘. 이미지 크기: "+sz.w+"×"+sz.h+"px.\n"+
-          "읽기 어렵거나 불명확한 글자·수식이 있으면 해당 영역의 대략적 좌표도 알려줘.\n\n"+
-          "다음 형식으로만 출력:\nTEXT: 인식된 전체 텍스트\nUNCLEAR: 없음 (또는 불명확한 영역을 x,y,너비,높이 픽셀 단위로 — 여러 개면 | 로 구분)",
+          "너는 손글씨 OCR 전문가야. 이 학습 답안을 읽어줘. 이미지 크기: "+sz.w+"×"+sz.h+"px (좌상단이 0,0).\n"+
+          "정말 읽기 어려운 글자·기호·수식이 있으면, 그 부분마다 그것을 '딱 감싸는 최소 크기'의 박스를 따로따로 잡아줘. 한 덩어리로 크게 잡지 말고 안 읽히는 글자만 좁게, 최대 6개. 잘 읽히면 '없음'.\n\n"+
+          "다음 형식으로만 출력:\nTEXT: 인식된 전체 텍스트 (안 읽히는 글자는 □로 표시)\nUNCLEAR: 없음 (또는 불명확한 영역을 x,y,너비,높이 픽셀 단위로 — 여러 개면 | 로 구분)",
           [{type:"image",source:{type:"base64",media_type:"image/png",data:img}}],
           false,{maxTok:400,model:ocrModel()},abortRef.current?.signal
         );
         const ocr=parseOcrCheck(ocrRaw);
         if(ocr.unclear.length>0){
-          ocrImgRef.current=img;
-          setOcrImg("data:image/png;base64,"+img);
+          // 별도 화면 대신, 쓰던 노트 그대로 두고 안 읽힌 곳에 빨간 박스 표시 + 지우개 모드
           setOcrImgSize(sz);
           setOcrHighlights(ocr.unclear);
-          setPhase("ocr_check");
+          setPhase("answering");
+          setTimeout(()=>padRef.current?.setEraser(),50);
           submitting.current=false;
           return;
         }
@@ -2218,7 +2231,7 @@ function Study({deck:initial,subjects}){
   const vTone=v==="correct"?"mint":v==="incorrect"?"rose":"gold";
   const vLabel=v==="correct"?"오 정확해! 💯":v==="incorrect"?"이건 다시 보자 🔁":"거의 다 왔어 ✏️";
   const isDeriving=phase==="derive_load"||phase==="derive_step"||phase==="derive_done";
-  const isActive=phase==="answering"||phase==="grading"||phase==="result"||phase==="dontknow"||isDeriving||phase==="followup"||phase==="ocr_check";
+  const isActive=phase==="answering"||phase==="grading"||phase==="result"||phase==="dontknow"||isDeriving||phase==="followup";
 
   return(
     <section className="study">
@@ -2569,38 +2582,6 @@ function Study({deck:initial,subjects}){
                   </div>
                 )}
               </div>
-            ):phase==="ocr_check"?(
-              <div className="card" style={{padding:16,display:"flex",flexDirection:"column",gap:12}}>
-                <div style={{fontSize:13,fontWeight:700,color:"var(--rose)"}}>✏️ 이 부분이 잘 안 읽혔어</div>
-                <div style={{position:"relative",display:"inline-block",width:"100%"}}>
-                  <img src={ocrImg} style={{width:"100%",borderRadius:12,display:"block"}}/>
-                  {ocrHighlights.map((h,i)=>(
-                    <div key={i} style={{
-                      position:"absolute",
-                      left:(h.x/ocrImgSize.w*100)+"%",
-                      top:(h.y/ocrImgSize.h*100)+"%",
-                      width:(h.w/ocrImgSize.w*100)+"%",
-                      height:(h.h/ocrImgSize.h*100)+"%",
-                      border:"2.5px solid var(--rose)",
-                      borderRadius:4,
-                      background:"rgba(255,107,138,0.18)",
-                      pointerEvents:"none"
-                    }}/>
-                  ))}
-                </div>
-                <p style={{fontSize:13,color:"var(--sub)",margin:0,lineHeight:1.7}}>
-                  빨간 박스 부분이 잘 안 보여. 조금 더 또렷하게 써줄 수 있어? 😊<br/>
-                  <span style={{fontSize:12}}>아니면 그냥 채점해줄게.</span>
-                </p>
-                <div className="row">
-                  <button className="btn gho sm" onClick={()=>{setPhase("answering");setOcrHighlights([]);setOcrImg(null);padRef.current?.clear();}}>
-                    다시 쓸게 ✏️
-                  </button>
-                  <button className="btn pri sm" onClick={()=>submit()}>
-                    그냥 채점해줘 →
-                  </button>
-                </div>
-              </div>
             ):phase==="dontknow"?(
               <div className="card" style={{padding:20,display:"flex",flexDirection:"column",gap:14,overflowY:"auto",maxHeight:"calc(100vh - 280px)"}}>
                 <div style={{display:"flex",alignItems:"center",gap:12,paddingBottom:10,borderBottom:"1.5px solid var(--line)"}}>
@@ -2696,7 +2677,18 @@ function Study({deck:initial,subjects}){
                     </div>
                   </div>
                 )}
-                <PenPad ref={padRef} kind="answer" hideOcr penOnlyDefault={true} disabled={phase==="grading"||followupBusy}/>
+                <PenPad ref={padRef} kind="answer" hideOcr penOnlyDefault={true} disabled={phase==="grading"||followupBusy}
+                  highlights={phase==="answering"?ocrHighlights:null} highlightSize={ocrImgSize}/>
+                {phase==="answering"&&ocrHighlights.length>0&&(
+                  <div style={{background:"#FFF5F5",border:"1.5px solid #FECACA",borderRadius:11,padding:"10px 12px",display:"flex",flexDirection:"column",gap:8}}>
+                    <div style={{fontSize:12.5,color:"#7F1D1D",lineHeight:1.6}}>
+                      <b style={{color:"var(--rose)"}}>빨간 박스 ❓</b> 부분이 잘 안 읽혔어. <b>🧽 지우개</b>로 그 부분만 지우고 <b>✏️ 펜</b>으로 또렷하게 다시 써줄래? (지금 지우개로 바꿔놨어)
+                    </div>
+                    <button className="btn gho sm" style={{alignSelf:"flex-start"}} onClick={()=>submit(true)} disabled={phase==="grading"}>
+                      이대로 그냥 제출 →
+                    </button>
+                  </div>
+                )}
                 {phase==="result"&&<p className="hint" style={{margin:"2px 0 0",fontSize:12}}>✏️ 빨간 펜으로 보완해봐</p>}
                 {phase!=="result"&&(
                   <textarea
@@ -2717,7 +2709,7 @@ function Study({deck:initial,subjects}){
                     )}
                     {submitErr&&<div className="err">{submitErr}</div>}
                     <div className="row">
-                      <button className="btn pri" onClick={submit} disabled={phase==="grading"}>제출 ✓</button>
+                      <button className="btn pri" onClick={()=>submit()} disabled={phase==="grading"}>제출 ✓</button>
                       <button className="btn gho" onClick={handleDontKnow} disabled={phase==="grading"}>몰라요 😅</button>
                       <button className="btn gho" onClick={skipConcept} disabled={phase==="grading"} title="이 개념은 오늘 패스 (레벨 안 깎임)">패스 ⏭️</button>
                     </div>

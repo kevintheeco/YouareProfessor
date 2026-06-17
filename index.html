@@ -1680,20 +1680,21 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
 }
 
 /* ── 이해 깊이 게이지 ── */
-function DepthGauge({depth}){
+function DepthGauge({depth,lang}){
   const LEVELS=["암기","이해","설명가능","응용가능"];
+  const LABELS=lang==="en"?["Recall","Understand","Explain","Apply"]:LEVELS;
   const idx=LEVELS.findIndex(l=>depth&&depth.startsWith(l));
   if(idx<0||!depth)return null;
   return(
     <div style={{padding:"8px 12px",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:10}}>
-      <div style={{fontSize:10,fontWeight:700,color:"var(--sub)",letterSpacing:".5px",marginBottom:6}}>이해 깊이</div>
+      <div style={{fontSize:10,fontWeight:700,color:"var(--sub)",letterSpacing:".5px",marginBottom:6}}>{lang==="en"?"Understanding depth":"이해 깊이"}</div>
       <div style={{display:"flex",gap:4}}>
         {LEVELS.map((l,i)=>(
           <div key={l} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
             <div style={{width:"100%",height:7,borderRadius:4,
               background:i<=idx?(i===0?"#A0A0D0":i===1?"#7B83D6":i===2?"#6C5CE7":"#4A3FC7"):"#E0E0F0"}}/>
             <span style={{fontSize:9.5,lineHeight:1.3,textAlign:"center",
-              color:i===idx?"#6C5CE7":"var(--sub)",fontWeight:i===idx?700:400}}>{l}</span>
+              color:i===idx?"#6C5CE7":"var(--sub)",fontWeight:i===idx?700:400}}>{LABELS[i]}</span>
           </div>
         ))}
       </div>
@@ -1824,6 +1825,9 @@ function Study({deck:initial,subjects}){
   const studyMat=deck.summary||deck.material.slice(0,8000);
   // 공부 언어: 설정(CFG.lang) 전역값 — 'ko'(기본) | 'en'
   const studyLang=CFG.lang==="en"?"en":"ko";
+  const T=(ko,en)=>studyLang==="en"?en:ko;   // 고정 UI 라벨용 간단 번역
+  const GAP_TYPE_EN={"개념누락":"Missing concept","이해얕음":"Shallow grasp","핵심비껴감":"Off the point","표현부족":"Unclear wording","갭없음":"No gap"};
+  const gapTypeLabel=(t)=>studyLang==="en"?(GAP_TYPE_EN[t]||t):t;
 
   async function retryVariant(){
     // 배운 걸로 굳히기: 같은 개념의 '변형 문제'(숫자·상황·표현만 바꿈)를 새로 만들어 다시 풀게 함
@@ -2243,7 +2247,7 @@ function Study({deck:initial,subjects}){
   const s=deckSummary(deck);
   const v=ev?.verdict;
   const vTone=v==="correct"?"mint":v==="incorrect"?"rose":"gold";
-  const vLabel=v==="correct"?"오 정확해! 💯":v==="incorrect"?"이건 다시 보자 🔁":"거의 다 왔어 ✏️";
+  const vLabel=v==="correct"?T("오 정확해! 💯","Spot on! 💯"):v==="incorrect"?T("이건 다시 보자 🔁","Let's revisit this 🔁"):T("거의 다 왔어 ✏️","Almost there ✏️");
   const isDeriving=phase==="derive_load"||phase==="derive_step"||phase==="derive_done";
   const isActive=phase==="answering"||phase==="grading"||phase==="result"||phase==="dontknow"||isDeriving||phase==="followup";
 
@@ -2254,13 +2258,13 @@ function Study({deck:initial,subjects}){
         {subj&&<span style={{fontSize:11,fontWeight:700,color:subj.color,flexShrink:0}}>{subj.name}</span>}
         <span className="snm">{deck.name}</span>
         <div className="prog" style={{gap:8}}>
-          <Stat n={s.mastered} l="익힘" t="mint"/>
-          <Stat n={s.due} l="대기" t="pri"/>
-          <Stat n={s.weak} l="약함" t="rose"/>
+          <Stat n={s.mastered} l={T("익힘","Mastered")} t="mint"/>
+          <Stat n={s.due} l={T("대기","Due")} t="pri"/>
+          <Stat n={s.weak} l={T("약함","Weak")} t="rose"/>
         </div>
-        <span className="muted" style={{fontSize:11,flexShrink:0}}>{count}문제</span>
+        <span className="muted" style={{fontSize:11,flexShrink:0}}>{count}{T("문제"," done")}</span>
         <button className="btn gho xs" style={{flexShrink:0}} onClick={()=>setShowInfo(v=>!v)}>
-          {showInfo?"▲ 닫기":"▼ 개념 목록"}
+          {showInfo?T("▲ 닫기","▲ Close"):T("▼ 개념 목록","▼ Concepts")}
         </button>
       </div>
 
@@ -2282,10 +2286,10 @@ function Study({deck:initial,subjects}){
       <div className="stage">
         {phase==="error"&&(
           <div className="card qcard msgcard"><Prof size={64}/><p className="muted">{errMsg}</p>
-            <button className="btn pri" onClick={()=>next()}>다시 시도</button></div>
+            <button className="btn pri" onClick={()=>next()}>{T("다시 시도","Try again")}</button></div>
         )}
         {phase==="loading"&&(
-          <div className="card qcard msgcard"><div className="spinner"/><p className="muted">문제 만드는 중…</p></div>
+          <div className="card qcard msgcard"><div className="spinner"/><p className="muted">{T("문제 만드는 중…","Making a question…")}</p></div>
         )}
         {isActive&&(
           <div className="ans-layout" key={concept?.id||""}>
@@ -2312,14 +2316,14 @@ function Study({deck:initial,subjects}){
               {phase==="followup"&&(
                 <div style={{display:"flex",flexDirection:"column",gap:10,flex:1}}>
                   <div style={{fontSize:12.5,color:"var(--sub)",lineHeight:1.65,padding:"8px 12px",background:"var(--bg)",borderRadius:10,borderLeft:"3px solid var(--line)"}}>
-                    <div style={{fontSize:10,fontWeight:700,color:"var(--sub)",marginBottom:3,letterSpacing:".5px"}}>원래 질문</div>
+                    <div style={{fontSize:10,fontWeight:700,color:"var(--sub)",marginBottom:3,letterSpacing:".5px"}}>{T("원래 질문","Original question")}</div>
                     <MathText text={q?.question} tag="div" style={{fontSize:12.5,color:"var(--sub)",lineHeight:1.65}}/>
                   </div>
                   {ev?.gap&&ev.gap_type!=="갭없음"&&ev.gap!=="없음"&&(
                     <div style={{background:"#FFF5F5",border:"1.5px solid #FECACA",borderRadius:10,padding:"8px 12px"}}>
                       <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
-                        <span style={{fontSize:10,fontWeight:700,color:"#DC2626",letterSpacing:".3px"}}>빠진 것</span>
-                        {ev.gap_type&&<span style={{fontSize:10,background:"#FEE2E2",color:"#B91C1C",borderRadius:5,padding:"1px 6px",fontWeight:600}}>{ev.gap_type}</span>}
+                        <span style={{fontSize:10,fontWeight:700,color:"#DC2626",letterSpacing:".3px"}}>{T("빠진 것","What's missing")}</span>
+                        {ev.gap_type&&<span style={{fontSize:10,background:"#FEE2E2",color:"#B91C1C",borderRadius:5,padding:"1px 6px",fontWeight:600}}>{gapTypeLabel(ev.gap_type)}</span>}
                       </div>
                       <MathText text={ev.gap} tag="div" style={{fontSize:12.5,color:"#7F1D1D",lineHeight:1.5}}/>
                     </div>
@@ -2327,14 +2331,14 @@ function Study({deck:initial,subjects}){
                   {followupBusy?(
                     <div style={{display:"flex",gap:8,alignItems:"center",padding:"12px 0"}}>
                       <div className="spinner" style={{width:16,height:16,borderWidth:2}}/>
-                      <span className="muted" style={{fontSize:13}}>후속 질문 만드는 중…</span>
+                      <span className="muted" style={{fontSize:13}}>{T("후속 질문 만드는 중…","Making a follow-up…")}</span>
                     </div>
                   ):(
                     <div style={{background:"#FFF6E9",border:"1.5px solid #FBD38D",borderRadius:14,padding:"14px 16px"}}>
                       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-                        <div style={{fontFamily:"'Jua',sans-serif",fontSize:11,letterSpacing:".5px",color:"#92620A"}}>보충 질문</div>
+                        <div style={{fontFamily:"'Jua',sans-serif",fontSize:11,letterSpacing:".5px",color:"#92620A"}}>{T("보충 질문","Follow-up")}</div>
                         {!followupHint&&<button className="btn gho sm" style={{fontSize:11,padding:"3px 10px"}} onClick={handleFollowupHint} disabled={followupHintBusy}>
-                          {followupHintBusy?<><span className="spinner" style={{width:10,height:10,borderWidth:1.5,display:"inline-block",verticalAlign:"middle",marginRight:4}}/>힌트 중…</>:"💡 힌트 주세요"}
+                          {followupHintBusy?<><span className="spinner" style={{width:10,height:10,borderWidth:1.5,display:"inline-block",verticalAlign:"middle",marginRight:4}}/>{T("힌트 중…","Hint…")}</>:T("💡 힌트 주세요","💡 Hint please")}
                         </button>}
                       </div>
                       <MathText text={followupQ} tag="div" style={{fontSize:15,lineHeight:1.9,fontWeight:600,color:"var(--ink)"}}/>
@@ -2342,11 +2346,11 @@ function Study({deck:initial,subjects}){
                   )}
                   {followupHint&&(
                     <div style={{background:"#F0FDF4",border:"1.5px solid #86EFAC",borderRadius:12,padding:"12px 14px"}}>
-                      <div style={{fontSize:10,fontWeight:700,color:"#166534",letterSpacing:".4px",marginBottom:6}}>💡 힌트</div>
+                      <div style={{fontSize:10,fontWeight:700,color:"#166534",letterSpacing:".4px",marginBottom:6}}>{T("💡 힌트","💡 Hint")}</div>
                       <MathText text={followupHint} tag="div" style={{fontSize:13,color:"#14532D",lineHeight:1.75}}/>
                     </div>
                   )}
-                  <p className="hint" style={{margin:0}}>원래 답은 그대로 두고, <b style={{color:"#DC2626"}}>빨간펜</b>으로 빠진 부분을 보완해봐 ✍️</p>
+                  <p className="hint" style={{margin:0}}>{T(<>원래 답은 그대로 두고, <b style={{color:"#DC2626"}}>빨간펜</b>으로 빠진 부분을 보완해봐 ✍️</>,<>Keep your answer, add the missing part in <b style={{color:"#DC2626"}}>red pen</b> ✍️</>)}</p>
                 </div>
               )}
               {isDeriving&&(
@@ -2392,7 +2396,7 @@ function Study({deck:initial,subjects}){
                   <div className="pg-nav">
                     <button className="pg-btn" onClick={()=>setLeftPage(0)} disabled={leftPage===0}>‹</button>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-                      <span className="pg-info">{leftPage===0?"채점 결과":"해설"}</span>
+                      <span className="pg-info">{leftPage===0?T("채점 결과","Result"):T("해설","Explanation")}</span>
                       <div className="pg-dots">
                         <span className={leftPage===0?"on":""}/>
                         <span className={leftPage===1?"on":""}/>
@@ -2406,10 +2410,10 @@ function Study({deck:initial,subjects}){
                     <>
                       {followupSuccess?(
                         <>
-                          <div className="verdict mint"><span className="dot"/>갭을 스스로 메웠어! 🎉</div>
+                          <div className="verdict mint"><span className="dot"/>{T("갭을 스스로 메웠어! 🎉","You filled the gap yourself! 🎉")}</div>
                           {(followupEv?.essence||ev?.essence)&&(
                             <div style={{background:"#F0EDFF",border:"1.5px solid #C4B5FD",borderRadius:12,padding:"10px 14px"}}>
-                              <div style={{fontSize:10,fontWeight:700,color:"#6C5CE7",letterSpacing:".5px",marginBottom:4}}>이 개념의 본질</div>
+                              <div style={{fontSize:10,fontWeight:700,color:"#6C5CE7",letterSpacing:".5px",marginBottom:4}}>{T("이 개념의 본질","The essence")}</div>
                               <MathText text={followupEv?.essence||ev?.essence} tag="div" style={{fontSize:13,color:"#221C39",lineHeight:1.6}}/>
                             </div>
                           )}
@@ -2426,7 +2430,7 @@ function Study({deck:initial,subjects}){
                           {/* ESSENCE */}
                           {ev.essence&&(
                             <div style={{background:"#F0EDFF",border:"1.5px solid #C4B5FD",borderRadius:12,padding:"10px 14px"}}>
-                              <div style={{fontSize:10,fontWeight:700,color:"#6C5CE7",letterSpacing:".5px",marginBottom:4}}>이 개념이 진짜 묻는 것</div>
+                              <div style={{fontSize:10,fontWeight:700,color:"#6C5CE7",letterSpacing:".5px",marginBottom:4}}>{T("이 개념이 진짜 묻는 것","What this really asks")}</div>
                               <MathText text={ev.essence} tag="div" style={{fontSize:13.5,color:"#221C39",lineHeight:1.6}}/>
                             </div>
                           )}
@@ -2441,28 +2445,28 @@ function Study({deck:initial,subjects}){
                           {ev.gap&&ev.gap_type!=="갭없음"&&ev.gap!=="없음"?(
                             <div style={{background:"#FFF5F5",border:"2px solid #FECACA",borderRadius:12,padding:"10px 14px"}}>
                               <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
-                                <span style={{fontSize:11,fontWeight:700,color:"#DC2626",letterSpacing:".3px"}}>빠진 것</span>
-                                {ev.gap_type&&<span style={{fontSize:11,background:"#FEE2E2",color:"#B91C1C",borderRadius:6,padding:"2px 7px",fontWeight:600}}>{ev.gap_type}</span>}
+                                <span style={{fontSize:11,fontWeight:700,color:"#DC2626",letterSpacing:".3px"}}>{T("빠진 것","What's missing")}</span>
+                                {ev.gap_type&&<span style={{fontSize:11,background:"#FEE2E2",color:"#B91C1C",borderRadius:6,padding:"2px 7px",fontWeight:600}}>{gapTypeLabel(ev.gap_type)}</span>}
                               </div>
                               <MathText text={ev.gap} tag="div" style={{fontSize:13.5,color:"#7F1D1D",lineHeight:1.6,fontWeight:500}}/>
                             </div>
                           ):ev.gap_type==="갭없음"&&(
                             <div style={{padding:"8px 12px",background:"#F0FFF8",border:"1.5px solid #A7F3D0",borderRadius:10,fontSize:13,color:"#065F46"}}>
-                              갭 없음 — 핵심을 완전히 잡았어 👍
+                              {T("갭 없음 — 핵심을 완전히 잡았어 👍","No gap — you nailed the core 👍")}
                             </div>
                           )}
                           {/* DEPTH 게이지 */}
-                          <DepthGauge depth={ev.depth}/>
+                          <DepthGauge depth={ev.depth} lang={studyLang}/>
                           {/* NEXT */}
                           {ev.next&&ev.gap_type!=="갭없음"&&(
                             <div style={{background:"#FFFDF8",border:"1.5px solid var(--line)",borderRadius:10,padding:"8px 12px"}}>
-                              <div style={{fontSize:10,fontWeight:700,color:"var(--sub)",letterSpacing:".5px",marginBottom:3}}>다음에 보강할 것</div>
+                              <div style={{fontSize:10,fontWeight:700,color:"var(--sub)",letterSpacing:".5px",marginBottom:3}}>{T("다음에 보강할 것","What to work on next")}</div>
                               <MathText text={ev.next} tag="div" style={{fontSize:13,color:"var(--ink)",lineHeight:1.55}}/>
                             </div>
                           )}
                         </>
                       )}
-                      <button className="btn gho sm" style={{alignSelf:"flex-end",marginTop:4}} onClick={()=>setLeftPage(1)}>모범 답안 펼쳐보기 ›</button>
+                      <button className="btn gho sm" style={{alignSelf:"flex-end",marginTop:4}} onClick={()=>setLeftPage(1)}>{T("모범 답안 펼쳐보기 ›","See model answer ›")}</button>
                     </>
                   )}
 
@@ -2471,7 +2475,7 @@ function Study({deck:initial,subjects}){
                     <>
                       {followupHistory.length>0&&!followupSuccess&&(
                         <div style={{background:"#FFF6E9",border:"1px solid #FBE3B8",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#8A5A12",marginBottom:4}}>
-                          3회 시도 완료 — 모범답안으로 개념을 잡아봐 💡
+                          {T("3회 시도 완료 — 모범답안으로 개념을 잡아봐 💡","3 tries done — grab the concept from the model answer 💡")}
                         </div>
                       )}
                       {/* 해설 텍스트 + 오버레이 하이라이트 캔버스 */}
@@ -2539,10 +2543,10 @@ function Study({deck:initial,subjects}){
                   )}
 
                   <div className="nextrow">
-                    <span className="nn">{v==="correct"?"다음 복습은 더 뒤로 미뤄둘게 👍":"넘어가기 전에 비슷한 문제로 굳혀볼래?"}</span>
+                    <span className="nn">{v==="correct"?T("다음 복습은 더 뒤로 미뤄둘게 👍","Next review pushed further out 👍"):T("넘어가기 전에 비슷한 문제로 굳혀볼래?","Lock it in with a similar question before moving on?")}</span>
                     <div style={{display:"flex",gap:8}}>
-                      {v!=="correct"&&<button className="btn gho" onClick={retryVariant} title="같은 개념의 변형 문제(숫자·형태만 바뀜)로 다시 풀기">🔁 비슷한 문제 풀래</button>}
-                      <button className="btn pri" onClick={()=>next(deck,null,true)}>넘어가요 →</button>
+                      {v!=="correct"&&<button className="btn gho" onClick={retryVariant} title={T("같은 개념의 변형 문제(숫자·형태만 바뀜)로 다시 풀기","A variant (numbers/form changed) of the same concept")}>{T("🔁 비슷한 문제 풀래","🔁 Try a similar one")}</button>}
+                      <button className="btn pri" onClick={()=>next(deck,null,true)}>{T("넘어가요 →","Next →")}</button>
                     </div>
                   </div>
                 </div>
@@ -2591,8 +2595,8 @@ function Study({deck:initial,subjects}){
                 )}
                 {phase==="derive_done"&&(
                   <div className="row" style={{padding:"20px 0",justifyContent:"center"}}>
-                    <button className="btn pri" onClick={()=>next(deck,concept.id)}>다시 도전 →</button>
-                    <button className="btn gho" onClick={()=>next(deck,null,true)}>넘어가요 →</button>
+                    <button className="btn pri" onClick={()=>next(deck,concept.id)}>{T("다시 도전 →","Try again →")}</button>
+                    <button className="btn gho" onClick={()=>next(deck,null,true)}>{T("넘어가요 →","Next →")}</button>
                   </div>
                 )}
               </div>
@@ -2601,19 +2605,19 @@ function Study({deck:initial,subjects}){
                 <div style={{display:"flex",alignItems:"center",gap:12,paddingBottom:10,borderBottom:"1.5px solid var(--line)"}}>
                   <span style={{fontSize:26,lineHeight:1}}>📖</span>
                   <div>
-                    <div style={{fontFamily:"'Jua',sans-serif",fontSize:17,color:"var(--ink)",lineHeight:1.3}}>이 개념 먼저 잡아보자</div>
+                    <div style={{fontFamily:"'Jua',sans-serif",fontSize:17,color:"var(--ink)",lineHeight:1.3}}>{T("이 개념 먼저 잡아보자","Let's nail this concept first")}</div>
                     <div style={{fontSize:12,color:"var(--sub)",marginTop:3}}>{concept?.name}</div>
                   </div>
                 </div>
                 {dontknowBusy&&(
-                  <div style={{display:"flex",gap:10,alignItems:"center",padding:"12px 0"}}><div className="spinner" style={{width:22,height:22,borderWidth:2.5}}/><span className="muted" style={{fontSize:13}}>설명 불러오는 중…</span></div>
+                  <div style={{display:"flex",gap:10,alignItems:"center",padding:"12px 0"}}><div className="spinner" style={{width:22,height:22,borderWidth:2.5}}/><span className="muted" style={{fontSize:13}}>{T("설명 불러오는 중…","Loading explanation…")}</span></div>
                 )}
                 {!dontknowBusy&&dontknow&&(
                   <>
                     <div style={{position:"relative",borderRadius:16}}>
                       <div style={{background:"var(--pri-s)",border:"1.5px solid #C8C2F0",borderRadius:16,padding:"18px 20px"}}>
                         <div style={{fontFamily:"'Jua',sans-serif",fontSize:11,letterSpacing:".6px",color:"var(--pri)",marginBottom:12,display:"flex",alignItems:"center",gap:5}}>
-                          <span style={{width:6,height:6,borderRadius:"50%",background:"var(--pri)",display:"inline-block"}}/>개념 설명
+                          <span style={{width:6,height:6,borderRadius:"50%",background:"var(--pri)",display:"inline-block"}}/>{T("개념 설명","Concept explainer")}
                         </div>
                         <MathText text={dontknow} tag="div" style={{fontSize:14.5,lineHeight:2.1,color:"var(--ink)"}}/>
                       </div>
@@ -2669,8 +2673,8 @@ function Study({deck:initial,subjects}){
                 )}
                 {!dontknowBusy&&(
                   <div className="row" style={{marginTop:6}}>
-                    <button className="btn pri" onClick={()=>next(deck,concept.id)}>다시 도전 →</button>
-                    <button className="btn gho" onClick={()=>next(deck,null,true)}>넘어가요 →</button>
+                    <button className="btn pri" onClick={()=>next(deck,concept.id)}>{T("다시 도전 →","Try again →")}</button>
+                    <button className="btn gho" onClick={()=>next(deck,null,true)}>{T("넘어가요 →","Next →")}</button>
                   </div>
                 )}
               </div>
@@ -2680,7 +2684,7 @@ function Study({deck:initial,subjects}){
                   <div style={{display:"flex",flexDirection:"column",gap:7,padding:"4px 0 6px"}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <span style={{fontSize:13,fontWeight:600,color:gradeProg>=100?"var(--mint)":"var(--pri-d)"}}>
-                        🧠 {gradeProg<40?"답안 읽는 중…":gradeProg<75?"개념이랑 비교하는 중…":gradeProg>=100?"완료!":"피드백 정리하는 중…"}
+                        🧠 {gradeProg<40?T("답안 읽는 중…","Reading your answer…"):gradeProg<75?T("개념이랑 비교하는 중…","Comparing with the concept…"):gradeProg>=100?T("완료!","Done!"):T("피드백 정리하는 중…","Writing feedback…")}
                       </span>
                       <span style={{fontSize:14,fontWeight:700,color:gradeProg>=100?"var(--mint)":"var(--pri-d)"}}>{gradeProg}%</span>
                     </div>
@@ -2696,14 +2700,14 @@ function Study({deck:initial,subjects}){
                 {phase==="answering"&&ocrHighlights.length>0&&(
                   <div style={{background:"#FFF5F5",border:"1.5px solid #FECACA",borderRadius:11,padding:"10px 12px",display:"flex",flexDirection:"column",gap:8}}>
                     <div style={{fontSize:12.5,color:"#7F1D1D",lineHeight:1.6}}>
-                      <b style={{color:"var(--rose)"}}>빨간 박스 ❓</b> 부분이 잘 안 읽혔어. <b>🧽 지우개</b>로 그 부분만 지우고 <b>✏️ 펜</b>으로 또렷하게 다시 써줄래? (지금 지우개로 바꿔놨어)
+                      {T(<><b style={{color:"var(--rose)"}}>빨간 박스 ❓</b> 부분이 잘 안 읽혔어. <b>🧽 지우개</b>로 그 부분만 지우고 <b>✏️ 펜</b>으로 또렷하게 다시 써줄래? (지금 지우개로 바꿔놨어)</>,<>The <b style={{color:"var(--rose)"}}>red box ❓</b> parts were hard to read. Erase just those with the <b>🧽 eraser</b> and rewrite them clearly with the <b>✏️ pen</b>. (Switched to eraser for you)</>)}
                     </div>
                     <button className="btn gho sm" style={{alignSelf:"flex-start"}} onClick={()=>submit(true)} disabled={phase==="grading"}>
-                      이대로 그냥 제출 →
+                      {T("이대로 그냥 제출 →","Submit as is →")}
                     </button>
                   </div>
                 )}
-                {phase==="result"&&<p className="hint" style={{margin:"2px 0 0",fontSize:12}}>✏️ 빨간 펜으로 보완해봐</p>}
+                {phase==="result"&&<p className="hint" style={{margin:"2px 0 0",fontSize:12}}>{T("✏️ 빨간 펜으로 보완해봐","✏️ Add corrections in red pen")}</p>}
                 {phase!=="result"&&(
                   <textarea
                     value={answer}
@@ -2723,9 +2727,9 @@ function Study({deck:initial,subjects}){
                     )}
                     {submitErr&&<div className="err">{submitErr}</div>}
                     <div className="row">
-                      <button className="btn pri" onClick={()=>submit()} disabled={phase==="grading"}>제출 ✓</button>
-                      <button className="btn gho" onClick={handleDontKnow} disabled={phase==="grading"}>몰라요 😅</button>
-                      <button className="btn gho" onClick={skipConcept} disabled={phase==="grading"} title="이 개념은 오늘 패스 (레벨 안 깎임)">패스 ⏭️</button>
+                      <button className="btn pri" onClick={()=>submit()} disabled={phase==="grading"}>{T("제출 ✓","Submit ✓")}</button>
+                      <button className="btn gho" onClick={handleDontKnow} disabled={phase==="grading"}>{T("몰라요 😅","Don't know 😅")}</button>
+                      <button className="btn gho" onClick={skipConcept} disabled={phase==="grading"} title={T("이 개념은 오늘 패스 (레벨 안 깎임)","Skip this concept today (level kept)")}>{T("패스 ⏭️","Skip ⏭️")}</button>
                     </div>
                   </>
                 )}
@@ -2734,13 +2738,13 @@ function Study({deck:initial,subjects}){
                     {submitErr&&<div className="err">{submitErr}</div>}
                     <div className="row">
                       <button className="btn pri" onClick={submitFollowup} disabled={followupBusy}>
-                        {followupBusy?"채점 중…":"보충 답변 제출 ✓"}
+                        {followupBusy?T("채점 중…","Grading…"):T("보충 답변 제출 ✓","Submit follow-up ✓")}
                       </button>
                       <button className="btn gho" onClick={()=>{
                         const uc=schedule(concept,ev?.verdict||"incorrect");
                         persist({...deckRef.current,concepts:deckRef.current.concepts.map(c=>c.id===concept.id?uc:c)});
                         setConcept(uc);setCount(n=>n+1);setPhase("result");setLeftPage(1);
-                      }} disabled={followupBusy}>모범답안 볼게</button>
+                      }} disabled={followupBusy}>{T("모범답안 볼게","Show answer")}</button>
                     </div>
                   </>
                 )}

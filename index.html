@@ -2483,7 +2483,7 @@ function Study({deck:initial,subjects}){
             <div className="card qcard">
               <div style={{position:"sticky",top:0,background:"var(--card)",zIndex:3,paddingBottom:phase==="result"?8:0,borderBottom:phase==="result"?"1px solid var(--line)":"none",marginBottom:phase==="result"?10:0,maxHeight:phase==="result"?"38vh":"none",overflowY:phase==="result"?"auto":"visible"}}>
                 <div className="chips">
-                  <span className="chip">{concept?.name}</span>
+                  <MathText text={concept?.name} tag="span" className="chip"/>
                   <span className="chip gho">{diffWord(concept?.box)}</span>
                   {q?.source&&<span className="chip" style={{
                     background:q.source==="기출"?"#FFF7E0":q.source==="심화"?"#FFE4EC":"#EFE7FF",

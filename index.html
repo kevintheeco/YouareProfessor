@@ -1796,16 +1796,35 @@ function Study({deck:initial,subjects}){
   // 세션 전체에서 캐시 공유: summary 있으면 우선 사용 (8000자 이하)
   const studyMat=deck.summary||deck.material.slice(0,8000);
 
-  function retryConcept(){
-    // 같은 문제를 다시 풀기: 채점 결과·노트만 비우고 q/concept는 유지한 채 답변 단계로 되돌림
+  async function retryVariant(){
+    // 배운 걸로 굳히기: 같은 개념의 '변형 문제'(숫자·상황·표현만 바꿈)를 새로 만들어 다시 풀게 함
     abortRef.current?.abort();
+    const ctrl=new AbortController();abortRef.current=ctrl;
+    const myId=++genId.current;
+    const baseQ=q,c=concept;
+    // 결과·노트 정리 후 로딩
     setEv(null);setAnswer("");setDeeper("");setDontknow("");setSubmitErr("");
     setHighlightActive(false);setAnnotQ("");setAnnotAnswer("");setLeftPage(0);
     setOcrHighlights([]);setOcrImg(null);ocrImgRef.current=null;
     setFollowupQ("");setFollowupCount(0);setFollowupHistory([]);setFollowupEv(null);setFollowupSuccess(false);
     padRef.current?.clear();
     setTimeout(()=>padRef.current?.forceColor(PEN_COLORS[0]),50);
-    setPhase("answering");
+    setPhase("loading");setQ(null);
+    try{
+      const raw=await callAI(
+        "너는 문제 변형 출제 전문가야. 아래 [원래 문제]와 똑같은 개념·유형을 묻되, 숫자·상황·예시·표현만 살짝 바꾼 변형문제 하나를 만들어. 방금 본 모범답안을 그대로 베껴 쓸 수 없고 새로 풀어야 하도록. 난이도는 원래와 비슷하게. 수식은 LaTeX($...$). 반드시 아래 형식으로만 출력 (코드블록 없이):\nQTYPE: recall 또는 understand 또는 apply\nQUESTION: 질문 내용\nPOINTS: 핵심1 | 핵심2 | 핵심3\n\n자료:\n"+studyMat.slice(0,4000),
+        "개념: "+c.name+"\n원래 문제 유형: "+(baseQ?.qtype||"understand")+"\n[원래 문제]:\n"+(baseQ?.question||""),
+        false,{maxTok:800,model:CFG.qmodel},ctrl.signal);
+      if(genId.current!==myId)return;
+      const pq=parseQuestion(raw);
+      if(baseQ?.qtype)pq.qtype=baseQ.qtype;
+      pq.source="변형";
+      setQ(pq);setPhase("answering");
+    }catch(e){
+      if(genId.current!==myId||e.name==="AbortError")return;
+      // 변형 생성 실패 시 원래 문제로 폴백
+      setQ(baseQ);setPhase("answering");setSubmitErr("변형 문제 생성 실패: "+e.message+" — 원래 문제로 다시 풀어볼게");
+    }
   }
 
   function skipConcept(){
@@ -2493,9 +2512,9 @@ function Study({deck:initial,subjects}){
                   )}
 
                   <div className="nextrow">
-                    <span className="nn">{v==="correct"?"다음 복습은 더 뒤로 미뤄둘게 👍":"아쉬우면 같은 문제 다시 풀어봐"}</span>
+                    <span className="nn">{v==="correct"?"다음 복습은 더 뒤로 미뤄둘게 👍":"넘어가기 전에 비슷한 문제로 굳혀볼래?"}</span>
                     <div style={{display:"flex",gap:8}}>
-                      {v!=="correct"&&<button className="btn gho" onClick={retryConcept} title="같은 문제를 빈 노트로 다시 풀기">🔁 다시 풀래</button>}
+                      {v!=="correct"&&<button className="btn gho" onClick={retryVariant} title="같은 개념의 변형 문제(숫자·형태만 바뀜)로 다시 풀기">🔁 비슷한 문제 풀래</button>}
                       <button className="btn pri" onClick={()=>next(deck,null,true)}>넘어가요 →</button>
                     </div>
                   </div>

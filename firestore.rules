@@ -1,0 +1,11 @@
+rules_version = '2';
+// 니가교수 클라우드 동기화 보안 규칙
+// Firebase 콘솔 → Firestore Database → 규칙(Rules) 탭에 붙여넣고 "게시"
+// 핵심: 로그인한 본인만 자기 데이터(users/{uid} 아래)를 읽고 쓸 수 있음.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}

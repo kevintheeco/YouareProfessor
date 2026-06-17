@@ -12,6 +12,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 
 <style>
 :root {
@@ -245,6 +246,10 @@ const { useState, useEffect, useRef, useCallback } = React;
 const DB_NAME="nigakyo", DB_STORE="kv";
 let _idb=null;   // IndexedDB 핸들 (null이면 localStorage 폴백)
 let _cache={};   // ng:* 전체 메모리 미러 (동기 읽기용)
+let _meta={};    // 키별 마지막 수정 시각(ms) — 클라우드 병합용
+const META_KEY="ng:__meta";
+// 클라우드 동기화 제외: API 키(보안) + 내부 메타
+const SYNC_EXCLUDE=new Set(["ng:key","ng:geminiKey",META_KEY]);
 
 function _idbOpen(){
   return new Promise((res,rej)=>{
@@ -287,19 +292,32 @@ async function initStorage(){
     _idb=null;_cache={};
     try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith("ng:")){try{_cache[k]=JSON.parse(localStorage.getItem(k));}catch{_cache[k]=localStorage.getItem(k);}}}}catch(_){}
   }
+  _meta=(_cache[META_KEY]&&typeof _cache[META_KEY]==="object")?_cache[META_KEY]:{};
 }
 
+// 로컬에만 기록 (클라우드 푸시 없음) — 동기화 시 역방향 루프 방지
+function _writeLocal(k,v){
+  _cache[k]=v;
+  try{if(_idb)_idbPut(k,v);else localStorage.setItem(k,JSON.stringify(v));return true;}
+  catch(e){console.error("[LS] 저장 실패:",k,e);return false;}
+}
 const LS = {
   get(k){return Object.prototype.hasOwnProperty.call(_cache,k)?_cache[k]:null;},
   set(k,v){
-    _cache[k]=v;
-    try{
-      if(_idb)_idbPut(k,v);
-      else localStorage.setItem(k,JSON.stringify(v));
-      return true;
-    }catch(e){console.error("[LS] 저장 실패:",k,e);return false;}
+    const ok=_writeLocal(k,v);
+    if(k.startsWith("ng:")&&k!==META_KEY){
+      _meta[k]=Date.now();_writeLocal(META_KEY,_meta);
+      cloudMaybePush(k);
+    }
+    return ok;
   },
-  del(k){delete _cache[k];try{if(_idb)_idbDel(k);else localStorage.removeItem(k);}catch{}},
+  del(k){
+    delete _cache[k];try{if(_idb)_idbDel(k);else localStorage.removeItem(k);}catch{}
+    if(k.startsWith("ng:")&&k!==META_KEY){
+      delete _meta[k];_writeLocal(META_KEY,_meta);
+      cloudMaybeDelete(k);
+    }
+  },
 };
 function getStorageSize(){
   let t=0;
@@ -384,16 +402,72 @@ const FIREBASE_CONFIG={
   messagingSenderId:"307018527457",
   appId:"1:307018527457:web:83c46611055283c427bda0"
 };
-let _auth=null;
+let _auth=null,_db=null;
 function initFirebase(){
   try{
     if(window.firebase&&FIREBASE_CONFIG.apiKey&&!window.firebase.apps.length){
       window.firebase.initializeApp(FIREBASE_CONFIG);
     }
     if(window.firebase)_auth=window.firebase.auth();
-  }catch(e){console.warn("[firebase] 초기화 실패 — 로그인 비활성",e);_auth=null;}
+    try{if(window.firebase&&window.firebase.firestore)_db=window.firebase.firestore();}
+    catch(e){console.warn("[firebase] Firestore 사용 불가 — 클라우드 동기화 비활성",e);_db=null;}
+  }catch(e){console.warn("[firebase] 초기화 실패 — 로그인 비활성",e);_auth=null;_db=null;}
 }
 function nickKey(uid){return"ng:nick:"+uid;}
+
+/* ── 클라우드 동기화 (로그인 시 계정에 데이터 묶기) ──
+   구조: users/{uid}/data/{key} = {k:원본키, v:값, t:수정시각}.
+   API 키는 올리지 않음. Firestore 미설정/오류 시 조용히 로컬 전용으로 동작. */
+let _uid=null;          // 현재 로그인 uid (null이면 동기화 안 함)
+let _syncing=false;     // 초기 병합 중(이 동안 푸시 억제)
+const _pending=new Set();let _pendTimer=null;
+function encKey(k){return encodeURIComponent(k).replace(/%/g,"_");}  // Firestore 문서 ID 안전화
+function _dataCol(uid){return _db.collection("users").doc(uid).collection("data");}
+async function cloudPushKey(uid,key){
+  if(SYNC_EXCLUDE.has(key)||!_db)return;
+  const v=Object.prototype.hasOwnProperty.call(_cache,key)?_cache[key]:null;
+  await _dataCol(uid).doc(encKey(key)).set({k:key,v:v===undefined?null:v,t:_meta[key]||Date.now()});
+}
+async function cloudDeleteKey(uid,key){if(!_db)return;await _dataCol(uid).doc(encKey(key)).delete();}
+function cloudMaybePush(k){
+  if(!_db||!_uid||_syncing||SYNC_EXCLUDE.has(k))return;
+  _pending.add(k);clearTimeout(_pendTimer);_pendTimer=setTimeout(flushPending,1200);
+}
+async function flushPending(){
+  if(!_db||!_uid)return;
+  const keys=[..._pending];_pending.clear();
+  for(const k of keys){try{await cloudPushKey(_uid,k);}catch(e){console.warn("[cloud push]",k,e);}}
+}
+function cloudMaybeDelete(k){
+  if(!_db||!_uid||_syncing||SYNC_EXCLUDE.has(k))return;
+  cloudDeleteKey(_uid,k).catch(e=>console.warn("[cloud del]",k,e));
+}
+// 로그인 시: 클라우드와 로컬을 시각 비교로 병합 (최신 우선, 비기면 로컬 유지+업로드)
+async function cloudSyncOnLogin(uid){
+  if(!_db||!uid)return{pulled:0,pushed:0};
+  _syncing=true;let pulled=0,pushed=0;
+  try{
+    const snap=await _dataCol(uid).get();
+    const cloud={};
+    snap.forEach(d=>{const x=d.data();if(x&&typeof x.k==="string")cloud[x.k]={v:x.v,t:x.t||0};});
+    const localKeys=Object.keys(_cache).filter(k=>k.startsWith("ng:")&&!SYNC_EXCLUDE.has(k));
+    const keys=new Set([...localKeys,...Object.keys(cloud)]);
+    const toPush=[];
+    keys.forEach(key=>{
+      if(SYNC_EXCLUDE.has(key))return;
+      const hasLocal=Object.prototype.hasOwnProperty.call(_cache,key);
+      const lt=_meta[key]||0;
+      const c=cloud[key];
+      if(!c){if(hasLocal)toPush.push(key);return;}      // 클라우드에 없음 → 올림
+      if(!hasLocal||c.t>lt){_writeLocal(key,c.v);_meta[key]=c.t;pulled++;return;} // 클라우드가 최신 → 받음
+      toPush.push(key);                                  // 로컬이 최신/동률 → 올림
+    });
+    _writeLocal(META_KEY,_meta);
+    for(const key of toPush){if(!_meta[key])_meta[key]=Date.now();try{await cloudPushKey(uid,key);pushed++;}catch(e){console.warn("[cloud push]",key,e);}}
+    if(pushed)_writeLocal(META_KEY,_meta);
+  }catch(e){console.warn("[cloud] 로그인 동기화 실패 (Firestore 설정 확인)",e);}
+  _syncing=false;return{pulled,pushed};
+}
 const MODELS=[
   {id:"claude-sonnet-4-6",label:"Sonnet 4.6 · 추천"},
   {id:"gemini-2.0-flash",label:"Gemini 2.0 Flash · 무료 가능"},
@@ -693,21 +767,28 @@ function App(){
   const [user,setUser]=useState(null);
   const [nick,setNick]=useState("");
   const [showProfile,setShowProfile]=useState(false);
+  const [syncing,setSyncing]=useState(false);
 
   const refresh=()=>setDecks(LS.get(DECKS_KEY)||[]);
   useEffect(()=>{refresh();},[]);
 
-  // 구글 로그인 상태 구독
+  // 구글 로그인 상태 구독 + 클라우드 동기화
   useEffect(()=>{
     if(!_auth)return;
-    return _auth.onAuthStateChanged(u=>{
+    return _auth.onAuthStateChanged(async u=>{
       setUser(u);
-      if(u){
-        const stored=LS.get(nickKey(u.uid));
-        const n=stored||u.displayName||(u.email?u.email.split("@")[0]:tr("학습자","Learner"));
-        if(!stored)LS.set(nickKey(u.uid),n);
-        setNick(n);
-      }else setNick("");
+      if(!u){_uid=null;setNick("");return;}
+      _uid=u.uid;
+      if(_db){
+        setSyncing(true);
+        try{await cloudSyncOnLogin(u.uid);}catch(e){console.warn("[sync]",e);}
+        setSyncing(false);
+        refresh();setSubjects(defaultSubjects());
+      }
+      const stored=LS.get(nickKey(u.uid));
+      const n=stored||u.displayName||(u.email?u.email.split("@")[0]:tr("학습자","Learner"));
+      if(!stored)LS.set(nickKey(u.uid),n);
+      setNick(n);
     });
   },[]);
 
@@ -765,6 +846,13 @@ function App(){
                 <div style={{fontFamily:"'Jua',sans-serif",fontSize:16,color:"var(--ink)"}}>{nick}</div>
                 <div style={{fontSize:12,color:"var(--sub)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.email}</div>
               </div>
+            </div>
+            <div style={{fontSize:12.5,padding:"8px 12px",borderRadius:10,
+              background:_db?"#F0FDF4":"#FFF6E9",border:"1px solid "+(_db?"#B7EBC6":"#FBE3B8"),
+              color:_db?"#166534":"#8A5A12",lineHeight:1.6}}>
+              {syncing?tr("☁️ 동기화 중…","☁️ Syncing…")
+               :_db?tr("☁️ 클라우드 저장 켜짐 — 이 계정으로 로그인하면 어느 기기서든 이어집니다.","☁️ Cloud sync on — sign in on any device to continue.")
+               :tr("⚠️ 클라우드 미설정 — 이 기기에만 저장됩니다.","⚠️ Cloud not set up — saved on this device only.")}
             </div>
             <div className="selectrow">
               <label>{tr("닉네임","Nickname")}</label>

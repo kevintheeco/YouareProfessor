@@ -345,12 +345,13 @@ const defaultSubjects=()=>LS.get(SUBJS_KEY)||[
 ];
 
 /* ── API 설정 (initStorage 후 loadCFG로 채움) ── */
-const CFG={key:"",model:"claude-sonnet-4-6",qmodel:"claude-haiku-4-5-20251001",geminiKey:""};
+const CFG={key:"",model:"claude-sonnet-4-6",qmodel:"claude-haiku-4-5-20251001",geminiKey:"",lang:"ko"};
 function loadCFG(){
   CFG.key=LS.get("ng:key")||"";
   CFG.model=LS.get("ng:model")||"claude-sonnet-4-6";
   CFG.qmodel=LS.get("ng:qmodel")||"claude-haiku-4-5-20251001";
   CFG.geminiKey=LS.get("ng:geminiKey")||"";
+  CFG.lang=LS.get("ng:lang")||"ko";
 }
 // 이미지·PDF 인식용 모델: 가진 키 기준 (Claude 우선, 없으면 Gemini) — Gemini-only 유저도 동작
 function ocrModel(){
@@ -901,17 +902,18 @@ function KeyForm({onSaved,cta,showCancel,onCancel}){
   const [geminiKey,setGeminiKey]=useState(CFG.geminiKey);
   const [model,setModel]=useState(CFG.model);
   const [qmodel,setQmodel]=useState(CFG.qmodel);
+  const [lang,setLang]=useState(CFG.lang||"ko");
   const [testing,setTesting]=useState(false);
   const [err,setErr]=useState("");
   async function save(){
     const hasA=key.trim().length>0,hasG=geminiKey.trim().length>0;
     if(!hasA&&!hasG){setErr("최소 하나의 API 키를 입력해줘.");return;}
     setTesting(true);setErr("");
-    CFG.key=key.trim();CFG.model=model;CFG.qmodel=qmodel;CFG.geminiKey=geminiKey.trim();
+    CFG.key=key.trim();CFG.model=model;CFG.qmodel=qmodel;CFG.geminiKey=geminiKey.trim();CFG.lang=lang;
     try{
       if(hasA)await callClaude("ping","'ok'라고만 답해.",false);
       else await callGemini("ping","'ok'라고만 답해.",false,{model:"gemini-2.0-flash"});
-      LS.set("ng:key",CFG.key);LS.set("ng:model",CFG.model);LS.set("ng:qmodel",CFG.qmodel);LS.set("ng:geminiKey",CFG.geminiKey);
+      LS.set("ng:key",CFG.key);LS.set("ng:model",CFG.model);LS.set("ng:qmodel",CFG.qmodel);LS.set("ng:geminiKey",CFG.geminiKey);LS.set("ng:lang",CFG.lang);
       setTesting(false);onSaved();
     }catch(e){setTesting(false);setErr("연결 실패: "+e.message);}
   }
@@ -932,6 +934,11 @@ function KeyForm({onSaved,cta,showCancel,onCancel}){
       <div className="selectrow"><label>문제 생성 모델</label>
         <select className="field" value={qmodel} onChange={e=>setQmodel(e.target.value)}>
           {QMODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
+        </select></div>
+      <div className="selectrow"><label>🌐 공부 언어 <span className="muted" style={{fontWeight:400}}>(문제·피드백·설명 언어)</span></label>
+        <select className="field" value={lang} onChange={e=>setLang(e.target.value)}>
+          <option value="ko">🇰🇷 한국어</option>
+          <option value="en">🇬🇧 English</option>
         </select></div>
       <div className="warn">키는 <b>이 기기 브라우저에만</b> 저장돼.
         Anthropic: <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a></div>
@@ -1456,7 +1463,6 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
   const [pen,setPen]=useState(false);
   const [newSubj,setNewSubj]=useState("");
   const [isExam,setIsExam]=useState(false);
-  const [lang,setLang]=useState("ko");
   const append=(t)=>{if(t)setMaterial(p=>(p.trim()?p.trim()+"\n":"")+t);};
 
   // 새 과목 빠른 추가
@@ -1541,7 +1547,7 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
       try{
         const r=await callAI(
           "너는 학습 자료 분석 전문가야. 자료가 무엇을 가르치려는지 핵심 주제와 목적을 먼저 파악해. 그 목적에 맞는 핵심 개념 8~15개를 짧은 명사구로 뽑아. 단순히 등장하는 단어가 아니라 이 자료의 학습 목표를 대표하는 개념이어야 해. JSON만: {\"concepts\":[\"...\"]}",
-          "자료:\n\n"+fullMaterial.slice(0,12000),true,{maxTok:512,lang});
+          "자료:\n\n"+fullMaterial.slice(0,12000),true,{maxTok:512,lang:CFG.lang});
         const extra=Array.isArray(r.concepts)?r.concepts:[];
         concepts=[...concepts,...extra.filter(c=>!concepts.includes(c))];
       }catch(e){
@@ -1571,7 +1577,7 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
     // ── 저장 ──
     const id=uid();
     const materialToStore=summary?fullMaterial.slice(0,5000):fullMaterial.slice(0,12000);
-    const deck={id,name:finalName,subjId,material:materialToStore,summary,createdAt:Date.now(),lang,
+    const deck={id,name:finalName,subjId,material:materialToStore,summary,createdAt:Date.now(),
       isExam:isExam&&examQuestions.length>0,examQuestions,
       concepts:concepts.map(nm=>({id:uid(),name:String(nm).slice(0,80),box:1,dueAt:0,reps:0,lapses:0}))};
 
@@ -1624,18 +1630,6 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
           <div style={{fontSize:11.5,color:"var(--sub)",marginTop:2,lineHeight:1.5}}>실제 문제를 뽑아서 그대로 풀고, 변형·심화문제까지 자동으로 만들어줘</div>
         </div>
       </label>
-
-      {/* 공부 언어 선택 */}
-      <div style={{padding:"12px 15px",border:"1.5px solid var(--line)",borderRadius:14,background:"#FBFAFF"}}>
-        <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>🌐 어떤 언어로 공부할래?</div>
-        <div style={{fontSize:11.5,color:"var(--sub)",margin:"2px 0 9px",lineHeight:1.5}}>영어 자료여도 한국어로 풀 수 있어. 문제·피드백·설명이 이 언어로 나와.</div>
-        <div style={{display:"flex",gap:8}}>
-          {[["ko","🇰🇷 한국어로"],["en","🇬🇧 English로"]].map(([v,lb])=>(
-            <button key={v} type="button" disabled={busy} onClick={()=>setLang(v)}
-              className={"btn sm"+(lang===v?" pri":" gho")} style={{flex:1}}>{lb}</button>
-          ))}
-        </div>
-      </div>
 
       {/* 내용 */}
       <textarea className="field" rows={7} disabled={busy} value={material}
@@ -1828,8 +1822,8 @@ function Study({deck:initial,subjects}){
 
   // 세션 전체에서 캐시 공유: summary 있으면 우선 사용 (8000자 이하)
   const studyMat=deck.summary||deck.material.slice(0,8000);
-  // 공부 언어: 'ko'(기본) | 'en' — 영어 자료를 영어로 공부할지 한국어로 공부할지
-  const studyLang=deck.lang==="en"?"en":"ko";
+  // 공부 언어: 설정(CFG.lang) 전역값 — 'ko'(기본) | 'en'
+  const studyLang=CFG.lang==="en"?"en":"ko";
 
   async function retryVariant(){
     // 배운 걸로 굳히기: 같은 개념의 '변형 문제'(숫자·상황·표현만 바꿈)를 새로 만들어 다시 풀게 함
@@ -2265,10 +2259,6 @@ function Study({deck:initial,subjects}){
           <Stat n={s.weak} l="약함" t="rose"/>
         </div>
         <span className="muted" style={{fontSize:11,flexShrink:0}}>{count}문제</span>
-        <button className="btn gho xs" style={{flexShrink:0}} title="공부 언어 전환 — 다음 문제부터 적용 (문제·피드백·설명 언어)"
-          onClick={()=>persist({...deckRef.current,lang:studyLang==="en"?"ko":"en"})}>
-          {studyLang==="en"?"🇬🇧 EN":"🇰🇷 KO"}
-        </button>
         <button className="btn gho xs" style={{flexShrink:0}} onClick={()=>setShowInfo(v=>!v)}>
           {showInfo?"▲ 닫기":"▼ 개념 목록"}
         </button>

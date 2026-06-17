@@ -444,8 +444,8 @@ function cloudMaybeDelete(k){
 }
 // 로그인 시: 클라우드와 로컬을 시각 비교로 병합 (최신 우선, 비기면 로컬 유지+업로드)
 async function cloudSyncOnLogin(uid){
-  if(!_db||!uid)return{pulled:0,pushed:0};
-  _syncing=true;let pulled=0,pushed=0;
+  if(!_db||!uid)return{pulled:0,pushed:0,ok:false};
+  _syncing=true;let pulled=0,pushed=0,ok=true;
   try{
     const snap=await _dataCol(uid).get();
     const cloud={};
@@ -465,8 +465,8 @@ async function cloudSyncOnLogin(uid){
     _writeLocal(META_KEY,_meta);
     for(const key of toPush){if(!_meta[key])_meta[key]=Date.now();try{await cloudPushKey(uid,key);pushed++;}catch(e){console.warn("[cloud push]",key,e);}}
     if(pushed)_writeLocal(META_KEY,_meta);
-  }catch(e){console.warn("[cloud] 로그인 동기화 실패 (Firestore 설정 확인)",e);}
-  _syncing=false;return{pulled,pushed};
+  }catch(e){console.warn("[cloud] 로그인 동기화 실패 (Firestore 설정 확인)",e);ok=false;}
+  _syncing=false;return{pulled,pushed,ok};
 }
 const MODELS=[
   {id:"claude-sonnet-4-6",label:"Sonnet 4.6 · 추천"},
@@ -768,6 +768,7 @@ function App(){
   const [nick,setNick]=useState("");
   const [showProfile,setShowProfile]=useState(false);
   const [syncing,setSyncing]=useState(false);
+  const [cloudStatus,setCloudStatus]=useState("off");  // off | ok | error
 
   const refresh=()=>setDecks(LS.get(DECKS_KEY)||[]);
   useEffect(()=>{refresh();},[]);
@@ -781,8 +782,9 @@ function App(){
       _uid=u.uid;
       if(_db){
         setSyncing(true);
-        try{await cloudSyncOnLogin(u.uid);}catch(e){console.warn("[sync]",e);}
-        setSyncing(false);
+        let res={ok:false};
+        try{res=await cloudSyncOnLogin(u.uid);}catch(e){console.warn("[sync]",e);}
+        setSyncing(false);setCloudStatus(res.ok?"ok":"error");
         refresh();setSubjects(defaultSubjects());
       }
       const stored=LS.get(nickKey(u.uid));
@@ -848,10 +850,11 @@ function App(){
               </div>
             </div>
             <div style={{fontSize:12.5,padding:"8px 12px",borderRadius:10,
-              background:_db?"#F0FDF4":"#FFF6E9",border:"1px solid "+(_db?"#B7EBC6":"#FBE3B8"),
-              color:_db?"#166534":"#8A5A12",lineHeight:1.6}}>
+              background:cloudStatus==="ok"?"#F0FDF4":"#FFF6E9",border:"1px solid "+(cloudStatus==="ok"?"#B7EBC6":"#FBE3B8"),
+              color:cloudStatus==="ok"?"#166534":"#8A5A12",lineHeight:1.6}}>
               {syncing?tr("☁️ 동기화 중…","☁️ Syncing…")
-               :_db?tr("☁️ 클라우드 저장 켜짐 — 이 계정으로 로그인하면 어느 기기서든 이어집니다.","☁️ Cloud sync on — sign in on any device to continue.")
+               :cloudStatus==="ok"?tr("☁️ 클라우드 저장 켜짐 — 이 계정으로 로그인하면 어느 기기서든 이어집니다.","☁️ Cloud sync on — sign in on any device to continue.")
+               :cloudStatus==="error"?tr("⚠️ 클라우드 연결 실패 — Firestore 설정을 확인해줘 (지금은 이 기기에만 저장).","⚠️ Cloud connection failed — check Firestore setup (saved on this device for now).")
                :tr("⚠️ 클라우드 미설정 — 이 기기에만 저장됩니다.","⚠️ Cloud not set up — saved on this device only.")}
             </div>
             <div className="selectrow">

@@ -1098,11 +1098,32 @@ function FileDropZone({files,onChange}){
   );
 }
 
+/* ── S펜 배럴(옆) 버튼 지우개 감지 (공용) ──
+   삼성노트처럼: 버튼 누르고 있는 동안만 지우개, 떼면 펜으로 복귀.
+   기기·브라우저마다 버튼 비트가 2(배럴)/32(지우개팁)로 제각각이라 둘 다 인식하고,
+   펜을 뒤집어 쓰는 경우(pointerType==="eraser")도 지우개로 본다. */
+const PEN_ERASE_DEBOUNCE=140; // ms: 드래그 중 버튼 신호 깜빡임 무시
+function penBarrelHeld(e){
+  if(e.pointerType==="eraser")return true;
+  if(e.pointerType!=="pen")return false;
+  return !!(e.buttons&2)||!!(e.buttons&32)||e.button===2||e.button===5;
+}
+// 지금 이 순간 지우개여야 하나? lastSeenRef로 신호 깜빡임을 디바운스.
+function eraseNow(e,lastSeenRef,toolIsEraser){
+  if(toolIsEraser)return true;
+  const now=e.timeStamp||performance.now();
+  if(penBarrelHeld(e)){lastSeenRef.current=now;return true;}
+  if(e.pointerType==="pen"&&lastSeenRef.current&&now-lastSeenRef.current<PEN_ERASE_DEBOUNCE)return true;
+  return false;
+}
+
 /* ── 해설 오버레이 캔버스 (투명, 형광펜·초록펜이 텍스트 위에 직접 표시) ── */
 const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
   const cvs=useRef(null);
   const strokes=useRef([]);
   const drawing=useRef(false);
+  const eraseGesture=useRef(false);
+  const lastBtn=useRef(0);
   React.useImperativeHandle(fwdRef,()=>({
     getImageBase64:()=>cvs.current?.toDataURL("image/png").split(",")[1]||null,
     hasStrokes:()=>strokes.current.length>0,
@@ -1152,26 +1173,29 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
     strokes.current=strokes.current.filter(({pts})=>!pts.some(p=>(p.x-x)**2+(p.y-y)**2<R));
     if(strokes.current.length!==prev)redraw();
   }
+  function startStroke(p){
+    drawing.current=true;
+    if(strokes.current.length>=500)strokes.current.shift();
+    strokes.current.push({pts:[p],col:tool==="hl"?"rgb(255,230,0)":"#27AE60",sz:tool==="hl"?20:2.5});
+  }
   function down(e){
     if(disabled||e.pointerType!=="pen")return;
     e.preventDefault();
     try{e.target.setPointerCapture(e.pointerId);}catch(_){}
     const p=pt(e);
-    const isSpEraser=(!!(e.buttons&34)||e.button===2);
-    if(isSpEraser||tool==="eraser"){drawing.current=false;eraseAt(p.x,p.y);return;}
-    drawing.current=true;
-    if(strokes.current.length>=500)strokes.current.shift();
-    strokes.current.push({pts:[p],col:tool==="hl"?"rgb(255,230,0)":"#27AE60",sz:tool==="hl"?20:2.5});
+    if(eraseNow(e,lastBtn,tool==="eraser")){eraseGesture.current=true;drawing.current=false;eraseAt(p.x,p.y);return;}
+    eraseGesture.current=false;
+    startStroke(p);
   }
   function move(e){
     if(disabled||e.pointerType!=="pen")return;
     const p=pt(e);
-    const isSpEraser=(!!(e.buttons&34)||e.button===2);
-    if(isSpEraser||tool==="eraser"){
+    if(eraseNow(e,lastBtn,tool==="eraser")){
       e.preventDefault();
-      if(drawing.current){strokes.current.pop();drawing.current=false;}
-      eraseAt(p.x,p.y);return;
+      if(drawing.current){const st=strokes.current[strokes.current.length-1];if(st&&st.pts.length<2)strokes.current.pop();drawing.current=false;}
+      eraseGesture.current=true;eraseAt(p.x,p.y);return;
     }
+    if(eraseGesture.current){eraseGesture.current=false;e.preventDefault();startStroke(p);return;}
     if(!drawing.current)return;
     e.preventDefault();
     const st=strokes.current[strokes.current.length-1];if(!st)return;
@@ -1180,7 +1204,7 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
     ctx.lineCap="round";ctx.lineJoin="round";ctx.strokeStyle=st.col;ctx.lineWidth=st.sz;
     if(st.pts.length>1){ctx.beginPath();ctx.moveTo(st.pts[st.pts.length-2].x,st.pts[st.pts.length-2].y);ctx.lineTo(p.x,p.y);ctx.stroke();}
   }
-  const up=()=>{drawing.current=false;};
+  const up=()=>{drawing.current=false;eraseGesture.current=false;lastBtn.current=0;};
   return(
     <canvas ref={cvs}
       style={{position:"absolute",top:0,left:0,
@@ -1196,6 +1220,7 @@ const AnnotPad=React.forwardRef(function AnnotPad({disabled,tool},fwdRef){
 /* ── 질문 손글씨 패드 (단독, 배경 있음) ── */
 const QuestionPad=React.forwardRef(function QuestionPad({disabled,tool="pen"},fwdRef){
   const cvs=useRef(null);const strokes=useRef([]);const drawing=useRef(false);
+  const eraseGesture=useRef(false);const lastBtn=useRef(0);
   React.useImperativeHandle(fwdRef,()=>({
     getImageBase64:()=>cvs.current?.toDataURL("image/png").split(",")[1]||null,
     hasStrokes:()=>strokes.current.length>0,
@@ -1236,32 +1261,40 @@ const QuestionPad=React.forwardRef(function QuestionPad({disabled,tool="pen"},fw
     strokes.current=strokes.current.filter(({pts})=>!pts.some(p=>(p.x-x)**2+(p.y-y)**2<R));
     if(strokes.current.length!==prev)redraw();
   }
+  function startStroke(p){
+    drawing.current=true;
+    if(strokes.current.length>=500)strokes.current.shift();
+    strokes.current.push({pts:[p]});
+  }
   function down(e){
     if(disabled)return;
     if(e.pointerType!=="pen")return;
     e.preventDefault();
-    const isSPenEraser=(!!(e.buttons&34)||e.button===2);
-    if(isSPenEraser||tool==="eraser"){eraseAt(pt(e).x,pt(e).y);return;}
-    drawing.current=true;
+    const p=pt(e);
+    if(eraseNow(e,lastBtn,tool==="eraser")){eraseGesture.current=true;drawing.current=false;eraseAt(p.x,p.y);return;}
+    eraseGesture.current=false;
     try{e.target.setPointerCapture(e.pointerId);}catch(_){}
-    if(strokes.current.length>=500)strokes.current.shift();
-    strokes.current.push({pts:[pt(e)]});
+    startStroke(p);
   }
   function move(e){
     if(e.pointerType!=="pen"){drawing.current=false;return;}
-    const isSPenEraser=(!!(e.buttons&34)||e.button===2);
-    if(isSPenEraser||tool==="eraser"){
-      e.preventDefault();if(drawing.current){strokes.current.pop();drawing.current=false;}eraseAt(pt(e).x,pt(e).y);return;
+    if(disabled)return;
+    const p=pt(e);
+    if(eraseNow(e,lastBtn,tool==="eraser")){
+      e.preventDefault();
+      if(drawing.current){const st=strokes.current[strokes.current.length-1];if(st&&st.pts.length<2)strokes.current.pop();drawing.current=false;}
+      eraseGesture.current=true;eraseAt(p.x,p.y);return;
     }
-    if(!drawing.current||disabled)return;
+    if(eraseGesture.current){eraseGesture.current=false;e.preventDefault();startStroke(p);return;}
+    if(!drawing.current)return;
     e.preventDefault();
     const st=strokes.current[strokes.current.length-1];if(!st)return;
-    st.pts.push(pt(e));
+    st.pts.push(p);
     const ctx=cvs.current.getContext("2d");
     ctx.lineCap="round";ctx.lineJoin="round";ctx.strokeStyle="#221C39";ctx.lineWidth=2;
     if(st.pts.length>1){ctx.beginPath();ctx.moveTo(st.pts[st.pts.length-2].x,st.pts[st.pts.length-2].y);ctx.lineTo(st.pts[st.pts.length-1].x,st.pts[st.pts.length-1].y);ctx.stroke();}
   }
-  const up=()=>{drawing.current=false;};
+  const up=()=>{drawing.current=false;eraseGesture.current=false;lastBtn.current=0;};
   return(
     <canvas ref={cvs} className="pad"
       style={{height:110,cursor:disabled?"not-allowed":tool==="eraser"?"cell":"crosshair",borderRadius:12}}
@@ -1279,7 +1312,8 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
   const canvasRef=useRef(null);
   const strokes=useRef([]);
   const drawing=useRef(false);
-  const eraseGesture=useRef(false);
+  const eraseGesture=useRef(false);   // 지금 버튼-지우개 중인지
+  const lastBtn=useRef(0);            // 버튼 신호 마지막으로 본 시각(디바운스용)
   const [tool,setTool]=useState("pen");
   const [color,setColor]=useState(PEN_COLORS[0]);
   const [size,setSize]=useState(1);
@@ -1341,37 +1375,45 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     );
     if(strokes.current.length!==prev){redraw();setHasInk(strokes.current.length>0);}
   }
-  // S펜 옆 버튼(배럴) 지우개 신호 — 기기별로 버튼값이 2/32/5로 제각각이라 모두 인식
-  const penEraseSignal=(e)=>e.pointerType==="pen"&&(!!(e.buttons&34)||e.button===2||e.button===5);
+  function startStroke(p){
+    drawing.current=true;
+    if(strokes.current.length>=500)strokes.current.shift();
+    strokes.current.push({pts:[p],col:color,sz:size});
+  }
   function down(e){
     if(disabled)return;
     if(penOnly&&e.pointerType!=="pen")return;
     e.preventDefault();
     try{e.target.setPointerCapture(e.pointerId);}catch(_){}
     const p=pt(e);
-    if(penEraseSignal(e)||tool==="eraser"){
-      eraseGesture.current=true;   // 한 번 지우개로 시작하면 펜 뗄 때까지 유지
+    if(eraseNow(e,lastBtn,tool==="eraser")){
+      eraseGesture.current=true;
       drawing.current=false;
       eraseAt(p.x,p.y);
       return;
     }
     eraseGesture.current=false;
-    drawing.current=true;
-    if(strokes.current.length>=500)strokes.current.shift();
-    strokes.current.push({pts:[p],col:color,sz:size});
+    startStroke(p);
   }
   function move(e){
     if(disabled)return;
     if(penOnly&&e.pointerType!=="pen"){drawing.current=false;return;}
     const p=pt(e);
-    if(penEraseSignal(e))eraseGesture.current=true;   // 그리던 중 버튼 누르면 즉시 지우개로 전환
-    if(eraseGesture.current||tool==="eraser"){
+    if(eraseNow(e,lastBtn,tool==="eraser")){
       e.preventDefault();
-      if(drawing.current){
-        strokes.current.pop();
+      if(drawing.current){   // 그리던 중 버튼 누름 → 짧은 점 획은 버리고 지우개로
+        const st=strokes.current[strokes.current.length-1];
+        if(st&&st.pts.length<2)strokes.current.pop();
         drawing.current=false;
       }
+      eraseGesture.current=true;
       eraseAt(p.x,p.y);
+      return;
+    }
+    if(eraseGesture.current){   // 버튼에서 손 뗌 → 펜으로 복귀, 여기서부터 새 획
+      eraseGesture.current=false;
+      e.preventDefault();
+      startStroke(p);
       return;
     }
     if(!drawing.current)return;
@@ -1388,8 +1430,8 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
     }
     if(!hasInk)setHasInk(true);
   }
-  const up=()=>{drawing.current=false;eraseGesture.current=false;};
-  const cancel=()=>{drawing.current=false;eraseGesture.current=false;};
+  const up=()=>{drawing.current=false;eraseGesture.current=false;lastBtn.current=0;};
+  const cancel=()=>{drawing.current=false;eraseGesture.current=false;lastBtn.current=0;};
   function undo(){if(disabled)return;strokes.current.pop();redraw();setHasInk(strokes.current.length>0);}
   function clearPad(){strokes.current=[];redraw();setHasInk(false);setPadErr("");}
   async function recognize(){

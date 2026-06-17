@@ -361,6 +361,12 @@ function detectLang(text){
   const en=(text.match(/[A-Za-z]/g)||[]).length;
   return (en>30&&en>ko*4)?"en":"ko";
 }
+// 해설 가독성 규칙 — 수식/표/그래프가 화면에서 안 깨지게 출력 형식을 강제
+const RICH_FMT="\n\n[출력 형식 규칙 — 가독성 최우선, 반드시 지킬 것]\n"+
+"1) 모든 수식·기호·그리스문자는 LaTeX로: 인라인은 $...$, 행렬·여러 줄·정렬식(aligned)·연립식은 반드시 $$...$$ 블록(여러 줄 가능). 유니코드 수학기호(×·≤≥∫∑√ 등) 직접 쓰지 말고 LaTeX(\\times \\le \\int 등)로.\n"+
+"2) 달러·통화 금액은 백슬래시로 이스케이프: \\$10, \\$1,200 처럼. (수식 아닌 맨 $ 기호 절대 금지 — 안 그러면 화면이 깨짐)\n"+
+"3) 비교·수치·항목 정리는 GitHub 마크다운 표로:\n| 항목 | 값 |\n| --- | --- |\n| 예 | 1 |\n표 앞뒤에 빈 줄을 넣고, HTML <table>은 쓰지 말 것.\n"+
+"4) 그래프가 이해에 도움되면 <svg>를 코드블록 없이 직접 그려: width≤380 height≤260 viewBox 사용. 축에 라벨(예: 가로 수량 Q, 세로 가격 P), 곡선마다 짧은 라벨, 교점(균형점)은 점+값 표시. 축선=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, 글자 11~13px, 배경 #FFFDF8. 특히 경제학 수요·공급/비용곡선은 깔끔하고 라벨이 또렷하게.";
 // 이미지·PDF 인식용 모델: 가진 키 기준 (Claude 우선, 없으면 Gemini) — Gemini-only 유저도 동작
 function ocrModel(){
   if(CFG.key)return"claude-sonnet-4-6";
@@ -2044,7 +2050,7 @@ function Study({deck:initial,subjects}){
       if(img)textParts.push("\n학습자가 위 이미지에 손으로 쓴 답도 포함돼. 이미지 속 내용을 읽고 함께 채점해줘.");
       userBlocks.push({type:"text",text:textParts.join("\n")});
       const gradingRaw=await callAI(
-        "너는 학습 분석 튜터야. "+qtypeCtx+" 학습자 답안을 보고 '이 개념의 본질 대비 내 답의 갭'을 분석해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ 등)는 반드시 LaTeX로: 인라인 $...$, 블록 $$...$$. 유니코드 기호 직접 사용 금지. 다음 형식으로만 출력 (JSON·코드블록 없이):\nESSENCE: 이 질문이 진짜 요구하는 핵심 요소 1~3가지 (학습자가 반드시 알아야 할 것)\nGOT_IT: 내 답이 제대로 담은 부분 (인정해줄 것, 반말)\nGAP: 본질 대비 빠지거나 얕거나 비껴간 핵심 부분 (없으면 정확히 '없음')\nGAP_TYPE: 개념누락 / 이해얕음 / 핵심비껴감 / 표현부족 / 갭없음 중 정확히 하나\nDEPTH: 암기 수준 / 이해 수준 / 설명가능 수준 / 응용가능 수준 중 정확히 하나\nNEXT: 이 갭을 메우려면 구체적으로 뭘 보강해야 하는지 (반말, 1~2문장)\nVERDICT: correct 또는 partial 또는 incorrect (갭없음이면 correct, 핵심 갭이면 partial, 본질 전체 누락이면 incorrect)\nANSWER: 모범답안 3~5문장 (수식 LaTeX, 그래프 필요시 <svg> 태그 직접 — 코드블록 없이, width≤380 height≤260 viewBox 사용, 축=#221C39, 곡선=#6C5CE7·#27C2A0·#FF6B8A·#FFC24B, bg=#FFFDF8)\n\n자료:\n"+studyMat,
+        "너는 학습 분석 튜터야. "+qtypeCtx+" 학습자 답안을 보고 '이 개념의 본질 대비 내 답의 갭'을 분석해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ 등)는 반드시 LaTeX로: 인라인 $...$, 블록 $$...$$. 유니코드 기호 직접 사용 금지. 다음 형식으로만 출력 (JSON·코드블록 없이):\nESSENCE: 이 질문이 진짜 요구하는 핵심 요소 1~3가지 (학습자가 반드시 알아야 할 것)\nGOT_IT: 내 답이 제대로 담은 부분 (인정해줄 것, 반말)\nGAP: 본질 대비 빠지거나 얕거나 비껴간 핵심 부분 (없으면 정확히 '없음')\nGAP_TYPE: 개념누락 / 이해얕음 / 핵심비껴감 / 표현부족 / 갭없음 중 정확히 하나\nDEPTH: 암기 수준 / 이해 수준 / 설명가능 수준 / 응용가능 수준 중 정확히 하나\nNEXT: 이 갭을 메우려면 구체적으로 뭘 보강해야 하는지 (반말, 1~2문장)\nVERDICT: correct 또는 partial 또는 incorrect (갭없음이면 correct, 핵심 갭이면 partial, 본질 전체 누락이면 incorrect)\nANSWER: 모범답안 3~5문장 (수식 LaTeX, 그래프 필요시 <svg> 태그 직접)"+RICH_FMT+"\n\n자료:\n"+studyMat,
         userBlocks,false,{cache:true,maxTok:2048,lang:studyLang},abortRef.current?.signal);
       const r=parseGrading(gradingRaw);setEv(r);
       const v=["correct","partial","incorrect"].includes(r.verdict)?r.verdict:"partial";
@@ -2124,7 +2130,7 @@ function Study({deck:initial,subjects}){
       if(img)textParts.push("\n이미지에는 학습자의 '원래 답(검은펜/파란펜)'과 후속 질문에 답하려고 새로 보탠 '빨간펜 보완'이 함께 있어. 빨간펜으로 새로 보탠 내용을 중심으로, 후속 질문에 제대로 답했는지 평가해줘.");
       userBlocks.push({type:"text",text:textParts.join("\n")});
       const raw=await callAI(
-        "너는 학습 분석 튜터야. 후속 질문에 대한 답변만 갭 분석해. 이 후속 질문이 묻는 부분만 평가해 (전체 모범답안 기준 아님). 다음 형식으로만 출력:\nESSENCE: 이 후속 질문이 묻는 핵심\nGOT_IT: 맞게 표현한 부분 (반말)\nGAP: 여전히 부족한 부분 (없으면 정확히 '없음')\nGAP_TYPE: 개념누락 / 이해얕음 / 핵심비껴감 / 표현부족 / 갭없음 중 하나\nDEPTH: 암기 수준 / 이해 수준 / 설명가능 수준 / 응용가능 수준 중 하나\nNEXT: 1문장 (반말)\nVERDICT: correct 또는 partial 또는 incorrect\nANSWER: \n\n자료:\n"+studyMat,
+        "너는 학습 분석 튜터야. 후속 질문에 대한 답변만 갭 분석해. 이 후속 질문이 묻는 부분만 평가해 (전체 모범답안 기준 아님). 다음 형식으로만 출력:\nESSENCE: 이 후속 질문이 묻는 핵심\nGOT_IT: 맞게 표현한 부분 (반말)\nGAP: 여전히 부족한 부분 (없으면 정확히 '없음')\nGAP_TYPE: 개념누락 / 이해얕음 / 핵심비껴감 / 표현부족 / 갭없음 중 하나\nDEPTH: 암기 수준 / 이해 수준 / 설명가능 수준 / 응용가능 수준 중 하나\nNEXT: 1문장 (반말)\nVERDICT: correct 또는 partial 또는 incorrect\nANSWER: "+RICH_FMT+"\n\n자료:\n"+studyMat,
         userBlocks,false,{cache:true,maxTok:800,lang:studyLang},abortRef.current?.signal
       );
       const r=parseGrading(raw);
@@ -2214,7 +2220,7 @@ function Study({deck:initial,subjects}){
     setPhase("dontknow");setDontknow("");setDontknowBusy(true);
     try{
       const r=await callAI(
-        "너는 친절한 튜터야. 학습자가 이 개념을 전혀 모르니 처음 배우는 사람에게 직관적으로(비유·예시·왜 중요한지) 반말로 설명해줘.\n\n출력 형식 규칙:\n① 제목은 ## 소제목은 ### ② 핵심 용어나 강조는 **굵게** ③ 목록은 - 기호 ④ 수식은 LaTeX($...$, $$...$$) ⑤ >> --- === 같은 ASCII 기호 금지 ⑥ 코드·XML·SVG 출력 금지\n\n자료:\n"+studyMat,
+        "너는 친절한 튜터야. 학습자가 이 개념을 전혀 모르니 처음 배우는 사람에게 직관적으로(비유·예시·왜 중요한지) 반말로 설명해줘.\n\n출력 형식 규칙:\n① 제목은 ## 소제목은 ### ② 핵심 용어나 강조는 **굵게** ③ 목록은 - 기호 ④ 수식은 LaTeX($...$, $$...$$) ⑤ >> === 같은 ASCII 기호 금지 ⑥ 이해에 도움되면 표·그래프(<svg>) 적극 사용"+RICH_FMT+"\n\n자료:\n"+studyMat,
         "개념: "+concept.name+(q?"\n원래 질문: "+q.question:""),
         false,{cache:true,maxTok:1400,lang:studyLang},abortRef.current?.signal);
       setDontknow(r);
@@ -2239,7 +2245,7 @@ function Study({deck:initial,subjects}){
   async function explainMore(){
     setDeepBusy(true);
     try{const r=await callAI(
-      "너는 친절한 튜터야. 자료에 근거해 더 깊이 직관적으로(비유·예시·왜) 반말로 설명해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ × · 등)는 반드시 모두 LaTeX로: 인라인은 $...$, 블록은 $$..$$. 유니코드 기호 직접 사용 금지. 그래프·곡선·다이어그램이 이해에 도움이 되면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, font-size 11~13, 색상: 축선=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, 균형점=원형 #FFC24B, 배경=#FFFDF8).\n\n자료:\n"+studyMat,
+      "너는 친절한 튜터야. 자료에 근거해 더 깊이 직관적으로(비유·예시·왜) 반말로 설명해. 수식·행렬·그리스 문자·수학 기호(⊥ ∥ ∈ ∉ ⊆ ℝ ∇ × · 등)는 반드시 모두 LaTeX로: 인라인은 $...$, 블록은 $$..$$. 유니코드 기호 직접 사용 금지. 그래프·곡선·다이어그램이 이해에 도움이 되면 SVG로 그려줘(코드블록 없이 <svg> 태그 직접 사용, width≤380 height≤260 viewBox 사용, 축·레이블 포함, font-size 11~13, 색상: 축선=#221C39, 곡선은 #6C5CE7·#27C2A0·#FF6B8A·#FFC24B, 균형점=원형 #FFC24B, 배경=#FFFDF8)."+RICH_FMT+"\n\n자료:\n"+studyMat,
       "개념: "+concept.name+"\n질문: "+q.question+"\n모범답안: "+(ev?.model_answer||""),
       false,{cache:true,maxTok:1200,lang:studyLang},abortRef.current?.signal);
       setDeeper(r);}
@@ -2265,7 +2271,7 @@ function Study({deck:initial,subjects}){
     });
     try{
       const r=await callAI(
-        "친절한 튜터. 첫 글자부터 바로 설명. 수식은 LaTeX($...$). 반말.",
+        "친절한 튜터. 첫 글자부터 바로 설명. 반말."+RICH_FMT,
         userBlocks,false,{maxTok:1200,cache:true,lang:studyLang},abortRef.current?.signal);
       setAnnotAnswer(r);
     }catch(e){if(e.name==="AbortError")return;setAnnotAnswer("실패: "+e.message);}
@@ -2805,6 +2811,8 @@ function sanitizeSvg(s){
 ── */
 function _renderLatexInline(text,kp){
   if(!text)return[];
+  const D=String.fromCharCode(1);            // 통화 달러($) 보호용 placeholder
+  text=String(text).split("\\$").join(D);    // 이스케이프된 \$ (통화) 보호
   const nodes=[];
   const parts=text.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/);
   parts.forEach((part,i)=>{
@@ -2816,12 +2824,85 @@ function _renderLatexInline(text,kp){
         const html=window.katex?.renderToString(latex,{displayMode:disp,throwOnError:false,strict:false});
         if(html){nodes.push(React.createElement('span',{key:kp+i,style:disp?{display:"block",textAlign:"center",overflowX:"auto",margin:"8px 0"}:undefined,dangerouslySetInnerHTML:{__html:html}}));return;}
       }catch(e){console.warn("KaTeX:",e);}
-      nodes.push(React.createElement('span',{key:kp+i},part));
+      nodes.push(React.createElement('span',{key:kp+i},part.split(D).join("$")));
     }else if(part){
-      nodes.push(part);
+      nodes.push(part.split(D).join("$"));
     }
   });
   return nodes;
+}
+/* ── 마크다운 표 ── */
+const _splitRow=(l)=>l.trim().replace(/^\|/,"").replace(/\|$/,"").split("|").map(c=>c.trim());
+const _isTableRow=(l)=>/^\s*\|.*\|\s*$/.test(l);
+const _isTableSep=(l)=>/^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l)&&l.indexOf("-")>=0;
+/* ── 블록 파서 (제목·목록·인용·표·문단) ── */
+function _renderBlocks(seg,nodes,kr,kp){
+  const lines=seg.split("\n");let i=0;
+  while(i<lines.length){
+    const line=lines[i];const k=kp+"_"+(kr.n++);
+    // 표
+    if(_isTableRow(line)&&i+1<lines.length&&_isTableSep(lines[i+1])){
+      const header=_splitRow(line);
+      const aligns=_splitRow(lines[i+1]).map(c=>{const L=c.startsWith(":"),R=c.endsWith(":");return(L&&R)?"center":R?"right":"left";});
+      i+=2;const rows=[];
+      while(i<lines.length&&_isTableRow(lines[i])){rows.push(_splitRow(lines[i]));i++;}
+      const thS={padding:"7px 10px",border:"1px solid var(--line)",background:"var(--pri-s)",color:"var(--pri-d)",fontWeight:700,fontSize:12.5};
+      const tdS=(a)=>({padding:"7px 10px",border:"1px solid var(--line)",fontSize:13,lineHeight:1.6,textAlign:a,verticalAlign:"top"});
+      nodes.push(React.createElement("div",{key:k,style:{overflowX:"auto",margin:"10px 0"}},
+        React.createElement("table",{style:{borderCollapse:"collapse",width:"100%",background:"var(--card)"}},
+          React.createElement("thead",{key:"h"},React.createElement("tr",null,
+            header.map((c,ci)=>React.createElement("th",{key:ci,style:{...thS,textAlign:aligns[ci]||"left"}},..._renderInline(c,k+"h"+ci))))),
+          React.createElement("tbody",{key:"b"},rows.map((r,ri)=>React.createElement("tr",{key:ri,style:ri%2?{background:"var(--bg)"}:undefined},
+            r.map((c,ci)=>React.createElement("td",{key:ci,style:tdS(aligns[ci]||"left")},..._renderInline(c,k+"r"+ri+"c"+ci))))))
+        )
+      ));
+      continue;
+    }
+    if(/^###\s/.test(line)){
+      nodes.push(React.createElement("div",{key:k,style:{fontFamily:"'Jua',sans-serif",fontSize:13.5,color:"var(--pri-d)",marginTop:10,marginBottom:2}},..._renderInline(line.slice(4),k)));
+      i++;continue;
+    }
+    if(/^##\s/.test(line)){
+      nodes.push(React.createElement("div",{key:k,style:{fontFamily:"'Jua',sans-serif",fontSize:15,color:"var(--ink)",marginTop:14,marginBottom:5,paddingBottom:4,borderBottom:"1.5px solid var(--line)"}},..._renderInline(line.slice(3),k)));
+      i++;continue;
+    }
+    if(/^---+$/.test(line.trim())){
+      nodes.push(React.createElement("hr",{key:k,style:{border:"none",borderTop:"1px solid var(--line)",margin:"8px 0"}}));
+      i++;continue;
+    }
+    if(/^[-•]\s/.test(line)){
+      const items=[];
+      while(i<lines.length&&/^[-•]\s/.test(lines[i])){items.push(lines[i].replace(/^[-•]\s/,""));i++;}
+      nodes.push(React.createElement("div",{key:k,style:{display:"flex",flexDirection:"column",gap:3,margin:"4px 0 8px"}},
+        items.map((item,idx)=>React.createElement("div",{key:idx,style:{display:"flex",gap:7,alignItems:"flex-start"}},
+          React.createElement("span",{style:{color:"var(--pri)",fontWeight:900,flexShrink:0,lineHeight:1.85,fontSize:11}},"•"),
+          React.createElement("span",{style:{flex:1,lineHeight:1.78}},..._renderInline(item,k+"b"+idx))
+        ))
+      ));
+      continue;
+    }
+    if(/^\d+\.\s/.test(line)){
+      const items=[];let n=1;
+      while(i<lines.length&&/^\d+\.\s/.test(lines[i])){items.push({n,t:lines[i].replace(/^\d+\.\s/,"")});n++;i++;}
+      nodes.push(React.createElement("div",{key:k,style:{display:"flex",flexDirection:"column",gap:3,margin:"4px 0 8px"}},
+        items.map((item,idx)=>React.createElement("div",{key:idx,style:{display:"flex",gap:7,alignItems:"flex-start"}},
+          React.createElement("span",{style:{color:"var(--pri)",fontWeight:700,flexShrink:0,lineHeight:1.85,fontSize:12,minWidth:16,textAlign:"right"}},item.n+"."),
+          React.createElement("span",{style:{flex:1,lineHeight:1.78}},..._renderInline(item.t,k+"n"+idx))
+        ))
+      ));
+      continue;
+    }
+    if(/^>\s/.test(line)){
+      nodes.push(React.createElement("div",{key:k,style:{borderLeft:"3px solid var(--pri)",background:"var(--pri-s)",borderRadius:"0 8px 8px 0",padding:"6px 12px",margin:"4px 0",lineHeight:1.75,color:"var(--ink)"}},..._renderInline(line.slice(2),k)));
+      i++;continue;
+    }
+    if(!line.trim()){
+      if(nodes.length>0)nodes.push(React.createElement("div",{key:k,style:{height:5}}));
+      i++;continue;
+    }
+    nodes.push(React.createElement("div",{key:k,style:{lineHeight:1.85}},..._renderInline(line,k)));
+    i++;
+  }
 }
 function _renderInline(text,kp){
   if(!text)return[];
@@ -2843,60 +2924,30 @@ function _renderInline(text,kp){
 }
 function MathText({text,tag:Tag="p",className,style}){
   if(!text)return React.createElement(Tag,{className,style});
-  const cleaned=text.replace(/<!--[\s\S]*?-->/g,"").replace(/```[\w]*\s*(<svg[\s\S]*?<\/svg>)\s*```/gi,"$1");
+  const cleaned=String(text)
+    .replace(/<!--[\s\S]*?-->/g,"")
+    .replace(/```[\w]*\s*(<svg[\s\S]*?<\/svg>)\s*```/gi,"$1")
+    .replace(/\\\[([\s\S]+?)\\\]/g,(m,p)=>"\n\n$$"+p.trim()+"$$\n\n")   // \[..\] → $$..$$
+    .replace(/\\\(([\s\S]+?)\\\)/g,(m,p)=>"$"+p.trim()+"$");            // \(..\) → $..$
   if(Tag==="span")return React.createElement("span",{className,style},..._renderInline(cleaned,"s"));
+  const nodes=[];const kr={n:0};
   const svgSegs=cleaned.split(/(<svg[\s\S]*?<\/svg>)/i);
-  const nodes=[];let nk=0;
   svgSegs.forEach((seg,si)=>{
     if(si%2===1){nodes.push(React.createElement("div",{key:"svg"+si,className:"graph-block",dangerouslySetInnerHTML:{__html:sanitizeSvg(seg)}}));return;}
-    const lines=seg.split("\n");let i=0;
-    while(i<lines.length){
-      const line=lines[i];const k=si+"_"+(nk++);
-      if(/^###\s/.test(line)){
-        nodes.push(React.createElement("div",{key:k,style:{fontFamily:"'Jua',sans-serif",fontSize:13.5,color:"var(--pri-d)",marginTop:10,marginBottom:2}},..._renderInline(line.slice(4),k)));
-        i++;continue;
+    // 멀티라인 디스플레이 수식 $$...$$ 먼저 분리 (행렬·정렬식이 줄로 안 깨지게)
+    const dispSegs=seg.split(/(\$\$[\s\S]+?\$\$)/);
+    dispSegs.forEach((dseg,di)=>{
+      if(!dseg)return;
+      if(di%2===1){
+        const latex=dseg.slice(2,-2).trim();const dkk="dm"+si+"_"+di;
+        try{
+          const html=window.katex?.renderToString(latex,{displayMode:true,throwOnError:false,strict:false});
+          if(html){nodes.push(React.createElement("div",{key:dkk,style:{margin:"10px 0",overflowX:"auto"},dangerouslySetInnerHTML:{__html:html}}));return;}
+        }catch(e){console.warn("KaTeX:",e);}
+        nodes.push(React.createElement("div",{key:dkk},dseg));return;
       }
-      if(/^##\s/.test(line)){
-        nodes.push(React.createElement("div",{key:k,style:{fontFamily:"'Jua',sans-serif",fontSize:15,color:"var(--ink)",marginTop:14,marginBottom:5,paddingBottom:4,borderBottom:"1.5px solid var(--line)"}},..._renderInline(line.slice(3),k)));
-        i++;continue;
-      }
-      if(/^---+$/.test(line.trim())){
-        nodes.push(React.createElement("hr",{key:k,style:{border:"none",borderTop:"1px solid var(--line)",margin:"8px 0"}}));
-        i++;continue;
-      }
-      if(/^[-•]\s/.test(line)){
-        const items=[];
-        while(i<lines.length&&/^[-•]\s/.test(lines[i])){items.push(lines[i].replace(/^[-•]\s/,""));i++;}
-        nodes.push(React.createElement("div",{key:k,style:{display:"flex",flexDirection:"column",gap:3,margin:"4px 0 8px"}},
-          items.map((item,idx)=>React.createElement("div",{key:idx,style:{display:"flex",gap:7,alignItems:"flex-start"}},
-            React.createElement("span",{style:{color:"var(--pri)",fontWeight:900,flexShrink:0,lineHeight:1.85,fontSize:11}},"•"),
-            React.createElement("span",{style:{flex:1,lineHeight:1.78}},..._renderInline(item,k+"b"+idx))
-          ))
-        ));
-        continue;
-      }
-      if(/^\d+\.\s/.test(line)){
-        const items=[];let n=1;
-        while(i<lines.length&&/^\d+\.\s/.test(lines[i])){items.push({n,t:lines[i].replace(/^\d+\.\s/,"")});n++;i++;}
-        nodes.push(React.createElement("div",{key:k,style:{display:"flex",flexDirection:"column",gap:3,margin:"4px 0 8px"}},
-          items.map((item,idx)=>React.createElement("div",{key:idx,style:{display:"flex",gap:7,alignItems:"flex-start"}},
-            React.createElement("span",{style:{color:"var(--pri)",fontWeight:700,flexShrink:0,lineHeight:1.85,fontSize:12,minWidth:16,textAlign:"right"}},item.n+"."),
-            React.createElement("span",{style:{flex:1,lineHeight:1.78}},..._renderInline(item.t,k+"n"+idx))
-          ))
-        ));
-        continue;
-      }
-      if(/^>\s/.test(line)){
-        nodes.push(React.createElement("div",{key:k,style:{borderLeft:"3px solid var(--pri)",background:"var(--pri-s)",borderRadius:"0 8px 8px 0",padding:"6px 12px",margin:"4px 0",lineHeight:1.75,color:"var(--ink)"}},..._renderInline(line.slice(2),k)));
-        i++;continue;
-      }
-      if(!line.trim()){
-        if(nodes.length>0)nodes.push(React.createElement("div",{key:k,style:{height:5}}));
-        i++;continue;
-      }
-      nodes.push(React.createElement("div",{key:k,style:{lineHeight:1.85}},..._renderInline(line,k)));
-      i++;
-    }
+      _renderBlocks(dseg,nodes,kr,si+"_"+di);
+    });
   });
   return React.createElement("div",{className,style},...nodes);
 }

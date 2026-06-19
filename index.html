@@ -842,7 +842,7 @@ function App(){
   async function logout(){try{await _auth.signOut();}catch(e){}setShowProfile(false);}
   function saveNick(n){const v=(n||"").trim();if(!v||!user)return;setNick(v);LS.set(nickKey(user.uid),v);}
 
-  function openStudy(id){const d=LS.get(dk(id));if(d){setActiveDeck(d);setView("study");}}
+  function openStudy(id,mode){const d=LS.get(dk(id));if(d){setActiveDeck({...d,studyType:mode||d.studyType||"explain"});setView("study");}}
   function openNotes(id){const d=LS.get(dk(id));if(d){setNoteDeck(d);setView("notes");}}
   function studyWeak(deck){
     const fresh=LS.get(dk(deck.id))||deck;
@@ -1101,6 +1101,7 @@ function KeyForm({onSaved,cta,showCancel,onCancel}){
 /* ── 홈 ── */
 function Home({decks,subjects,onAdd,onOpen,onNotes,onChanged,nick}){
   const [det,setDet]=useState({});
+  const [pickFor,setPickFor]=useState(null);   // 공부 시작 시 모드 선택 시트 {id,def}
   useEffect(()=>{
     const o={};decks.forEach(d=>{const f=LS.get(dk(d.id));if(f)o[d.id]={...deckSummary(f),createdAt:f.createdAt,isExam:f.isExam,examCount:(f.examQuestions||[]).length,studyType:f.studyType};});setDet(o);
   },[decks]);
@@ -1183,7 +1184,7 @@ function Home({decks,subjects,onAdd,onOpen,onNotes,onChanged,nick}){
                   <Bar mastered={s.mastered} total={s.total}/>
                 </>):<div className="muted">{tr("준비 중…","Preparing…")}</div>}
                 <div className="acts">
-                  <button className="btn pri sm" onClick={()=>onOpen(d.id)}>
+                  <button className="btn pri sm" onClick={()=>setPickFor({id:d.id,def:(s?.studyType==="quiz"?"quiz":"explain")})}>
                     {tr("공부 시작","Study")}{s&&s.due>0?" · "+s.due+tr("개",""):""}
                   </button>
                   <button className="btn gho sm" onClick={()=>onNotes(d.id)}>📓</button>
@@ -1192,6 +1193,24 @@ function Home({decks,subjects,onAdd,onOpen,onNotes,onChanged,nick}){
               </article>
             );
           })}
+        </div>
+      )}
+      {pickFor&&(
+        <div onClick={()=>setPickFor(null)} style={{position:"fixed",inset:0,background:"rgba(34,28,57,.42)",zIndex:60,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div onClick={e=>e.stopPropagation()} className="card" style={{maxWidth:360,width:"100%",padding:22,display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{fontFamily:"'Jua',sans-serif",fontSize:16,color:"var(--ink)"}}>{tr("이 자료, 어떻게 공부할래?","How do you want to study this?")}</div>
+            {[["explain","🧠",tr("이해·설명형","Explain"),tr("손글씨로 풀고 AI 채점","Write it out, AI grades")],
+              ["quiz","📇",tr("암기·퀴즈형","Flashcards"),tr("OX·객관식·단답 즉시채점","Instant OX / choice / short")]].map(([val,emo,lbl,desc])=>{
+              const cur=pickFor.def===val;
+              return(
+                <button key={val} className="card" onClick={()=>{const id=pickFor.id;if(val!==pickFor.def)setMode(id,val);setPickFor(null);onOpen(id,val);}}
+                  style={{textAlign:"left",padding:"14px 16px",cursor:"pointer",
+                    border:"1.5px solid "+(cur?"var(--pri)":"var(--line)"),background:cur?"var(--pri-s)":"#FBFAFF"}}>
+                  <div style={{fontWeight:800,color:"var(--ink)"}}>{emo} {lbl}{cur?tr(" · 기본"," · default"):""}</div>
+                  <div style={{fontSize:12.5,color:"var(--sub)",marginTop:3}}>{desc}</div>
+                </button>);
+            })}
+          </div>
         </div>
       )}
     </section>
@@ -2130,6 +2149,8 @@ function Study({deck:initial,subjects}){
   const padRef=useRef(null);
   const ocrImgRef=useRef(null);
   const deckRef=useRef(deck);
+  const prefetchRef=useRef(null);        // 미리 생성한 다음 퀴즈 {id, item}
+  const prefetchAbortRef=useRef(null);
   const submitting=useRef(false);
   const followupSubmitting=useRef(false);
   const genId=useRef(0);
@@ -2217,7 +2238,12 @@ function Study({deck:initial,subjects}){
     const box=c.box||1;
 
     // ── 암기·퀴즈형 덱: 카드 퀴즈 생성 (기출·explain 경로 건너뜀) ──
-    if(quizMode){ await generateQuiz(c,ctrl,myId); return; }
+    if(quizMode){
+      const cache=prefetchRef.current;
+      if(cache&&!forceId&&cache.id===c.id){ prefetchRef.current=null; setQuizItem(cache.item); setPhase("quiz"); return; }
+      prefetchRef.current=null;
+      await generateQuiz(c,ctrl,myId); return;
+    }
 
     // ── 기출/족보 덱: box 레벨로 출제 모드 자동 결정 ──
     const examPool=(!practical&&d.isExam&&Array.isArray(d.examQuestions))
@@ -2290,8 +2316,8 @@ function Study({deck:initial,subjects}){
     }catch(e){if(genId.current===myId&&e.name!=="AbortError"){setPhase("error");setErrMsg(T("질문 생성 실패: ","Question generation failed: ")+e.message);}}
   }
 
-  // ── 암기·퀴즈형: box 레벨로 형식 결정 후 카드 문제 생성 ──
-  async function generateQuiz(c,ctrl,myId){
+  // ── 암기·퀴즈형: box 레벨로 형식 결정 후 카드 문제 객체 생성(상태 변경 없음) ──
+  async function buildQuizItem(c,signal){
     const fmt=quizFormat(c.box);
     const common="너는 대학 학습용 퀴즈 출제 전문가야. 아래 자료 범위 안에서 목표 개념을 묻는 문제 하나를 만들어. 수식은 LaTeX($...$)로. 자료에 근거 없는 내용은 묻지 마.";
     let sys;
@@ -2302,14 +2328,27 @@ function Study({deck:initial,subjects}){
     }else{
       sys=common+" 단답형으로 만들어.\n규칙: ① 정답은 용어·정의·연도·짧은 구절 등 짧고 명확한 것 ② 표현·표기·동의어 차이를 허용 목록으로 함께 제공.\nJSON만 출력: {\"question\":\"질문\",\"answer\":\"대표 정답\",\"accept\":[\"허용되는 다른 표기·동의어들\"],\"explain\":\"짧은 해설\"}";
     }
+    const r=await callAI(sys+"\n\n자료:\n"+studyMat.slice(0,5000),
+      "목표 개념: "+c.name,
+      true,{cache:true,maxTok:700,model:CFG.qmodel,lang:studyLang},signal);
+    if(!r||(fmt==="mc"&&!Array.isArray(r.choices)))throw new Error(T("형식 오류","bad format"));
+    return {format:fmt,...r};
+  }
+  async function generateQuiz(c,ctrl,myId){
     try{
-      const r=await callAI(sys+"\n\n자료:\n"+studyMat.slice(0,5000),
-        "목표 개념: "+c.name,
-        true,{cache:true,maxTok:700,model:CFG.qmodel,lang:studyLang},ctrl.signal);
+      const item=await buildQuizItem(c,ctrl.signal);
       if(genId.current!==myId)return;
-      if(!r||(fmt==="mc"&&!Array.isArray(r.choices))){setPhase("error");setErrMsg(T("문제 생성 실패: 형식 오류","Question generation failed: bad format"));return;}
-      setQuizItem({format:fmt,...r});setPhase("quiz");
+      setQuizItem(item);setPhase("quiz");
     }catch(e){if(genId.current===myId&&e.name!=="AbortError"){setPhase("error");setErrMsg(T("문제 생성 실패: ","Question generation failed: ")+e.message);}}
+  }
+  // 채점 후 다음 due 개념의 문제를 백그라운드로 미리 생성해 캐시(즉각성)
+  function prefetchNext(){
+    const d=deckRef.current;
+    const c=pickConcept(d,concept?.id);   // next()와 동일한 avoidId 규칙으로 예측
+    if(!c)return;
+    prefetchAbortRef.current?.abort();
+    const ctrl=new AbortController();prefetchAbortRef.current=ctrl;
+    buildQuizItem(c,ctrl.signal).then(item=>{prefetchRef.current={id:c.id,item};}).catch(()=>{});
   }
 
   const normAns=(s)=>String(s||"").toLowerCase().replace(/\s+/g,"").replace(/[.,;:!?'"()[\]{}·・]/g,"");
@@ -2337,9 +2376,10 @@ function Study({deck:initial,subjects}){
     }
     persist({...deckRef.current,concepts:deckRef.current.concepts.map(x=>x.id===concept.id?schedule(x,correct?"correct":"incorrect"):x)});
     setQuizSel(sel);setQuizCorrect(correct);setQuizGraded(true);setCount(n=>n+1);
+    prefetchNext();   // 다음 문제 미리 생성
   }
 
-  useEffect(()=>{next(initial);return()=>{abortRef.current?.abort();};},[]);
+  useEffect(()=>{next(initial);return()=>{abortRef.current?.abort();prefetchAbortRef.current?.abort();};},[]);
 
   // 채점 가짜 진행률 (0→93 천천히, 끝나면 100% 후 리셋)
   useEffect(()=>{

@@ -1996,7 +1996,7 @@ function WeakNotes({deck,onBack,onStudy}){
             <div key={c.id} style={{border:"1.5px solid var(--line)",borderRadius:14,padding:"14px 16px",background:"#FFFDF8"}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:(c.lastGap&&c.lastGap!=="없음")||c.lastAnswer?10:0}}>
                 <Meter box={c.box||1}/>
-                <span style={{fontFamily:"'Jua',sans-serif",fontSize:15,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</span>
+                <MathText text={c.name} tag="span" style={{fontFamily:"'Jua',sans-serif",fontSize:15,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}/>
                 {c.lapses>0&&<span style={{fontSize:11,background:"#FEE2E2",color:"#B91C1C",borderRadius:6,padding:"2px 7px",fontWeight:600,flexShrink:0}}>{tr("틀림 "+c.lapses+"회","Missed ×"+c.lapses)}</span>}
                 <span style={{fontSize:11,color:"var(--sub)",flexShrink:0}}>Lv.{c.box||1}</span>
               </div>
@@ -2548,7 +2548,7 @@ function Study({deck:initial,subjects}){
           {deck.concepts.slice().sort((a,b)=>(a.box||1)-(b.box||1)).map(c=>(
             <div key={c.id} className={"crow"+(concept&&c.id===concept.id?" active":"")}
               onClick={()=>{if(phase!=="loading"&&phase!=="grading"){setShowInfo(false);next(deck,c.id);}}}>
-              <Meter box={c.box||1}/><span className="cn">{c.name}</span>
+              <Meter box={c.box||1}/><MathText text={c.name} tag="span" className="cn"/>
               <span className={"derive-badge"+(c.deriveMode==="derive"?" on":"")}
                 title={c.deriveMode==="derive"?T("유도 모드 ON — 클릭해서 끄기","Derive mode ON — click to turn off"):T("클릭하면 유도 모드로","Click for derive mode")}
                 onClick={e=>{e.stopPropagation();toggleDeriveMode(c.id);}}>∫</span>

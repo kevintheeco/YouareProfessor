@@ -2752,7 +2752,8 @@ function Study({deck:initial,subjects}){
           <div className="card qcard msgcard"><div className="spinner"/><p className="muted">{T("문제 만드는 중…","Making a question…")}</p></div>
         )}
         {phase==="quiz"&&quizItem&&(
-          <div className="card qcard" key={concept?.id||""} style={{maxWidth:680,margin:"0 auto"}}>
+          <div key={concept?.id||""} style={{display:"flex",gap:14,alignItems:"flex-start",justifyContent:"center",flexWrap:"wrap",maxWidth:scratchOpen?1140:680,margin:"0 auto"}}>
+          <div className="card qcard" style={{flex:"1 1 380px",maxWidth:680,minWidth:0}}>
             <div className="chips" style={{marginBottom:14}}>
               <MathText text={concept?.name} tag="span" className="chip"/>
               <span className="chip gho"><Meter box={concept?.box||1}/></span>
@@ -2833,9 +2834,11 @@ function Study({deck:initial,subjects}){
               </div>
             )}
 
-            {/* 연습장 — 계산·메모용 손글씨 (채점에 안 들어감) */}
+          </div>
+
+            {/* 연습장 — 문제 오른쪽, 계산·메모용 손글씨 (채점에 안 들어감) */}
             {scratchOpen&&(
-              <div style={{marginTop:16,borderTop:"1px dashed var(--line)",paddingTop:12}}>
+              <div className="card" key={"scratch"+(concept?.id||"")} style={{flex:"1 1 360px",minWidth:0,position:"sticky",top:16,padding:14}}>
                 <div style={{fontSize:11,fontWeight:700,color:"var(--sub)",marginBottom:8}}>{T("📝 연습장 — 여기 끄적인 건 채점에 안 들어가","📝 Scratchpad — anything here isn't graded")}</div>
                 <PenPad kind="scratch" onText={()=>{}} hideOcr/>
               </div>

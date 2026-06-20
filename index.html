@@ -1136,6 +1136,11 @@ function App(){
   const [syncBusy,setSyncBusy]=useState(false);
   const [cloudStatus,setCloudStatus]=useState("off");  // off | ok | error
   const [lastSyncAt,setLastSyncAt]=useState(0);
+  // 환영 화면: 앱 들어올 때 닉네임 부르며 잠깐 인사 (기존 사용자만 — 온보딩 중엔 X)
+  const [welcomed,setWelcomed]=useState(!CFG.key);
+  const [wHide,setWHide]=useState(false);
+  const dismissWelcome=()=>{setWHide(true);setTimeout(()=>setWelcomed(true),360);};
+  useEffect(()=>{if(!CFG.key)return;const t=setTimeout(dismissWelcome,2800);return ()=>clearTimeout(t);},[]);
 
   // 클라우드 동기화 상태 구독 (초기 병합 + 이후 변경 저장 모두 반영)
   useEffect(()=>{
@@ -1196,6 +1201,19 @@ function App(){
 
   return(
     <>
+      {!welcomed&&(
+        <div onClick={dismissWelcome} style={{position:"fixed",inset:0,zIndex:200,cursor:"pointer",
+          background:"linear-gradient(160deg,#6C5CE7 0%,#8B7BF0 60%,#A29BFE 100%)",
+          display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:13,color:"#fff",
+          opacity:wHide?0:1,transition:"opacity .36s ease",textAlign:"center",padding:24}}>
+          <div style={{background:"#fff",borderRadius:"50%",padding:16,boxShadow:"0 14px 44px rgba(0,0,0,.22)"}}><Prof size={86}/></div>
+          <div style={{fontFamily:"'Jua',sans-serif",fontSize:27,lineHeight:1.25,marginTop:4}}>
+            {nick?tr("안녕, ","Hi, ")+nick+"! 👋":tr("어서 와! 👋","Welcome! 👋")}
+          </div>
+          <div style={{fontSize:15,opacity:.95}}>{tr("오늘도 니가 교수님이야 — 같이 공부하자 📚","You're the prof today — let's study 📚")}</div>
+          <div style={{fontSize:12.5,opacity:.72,marginTop:20}}>{tr("화면을 누르면 시작","Tap anywhere to start")}</div>
+        </div>
+      )}
       <div className="hd">
         <div className="brand" onClick={()=>setView(CFG.key?"home":"onboard")}>
           <Prof size={44}/><div><h1>{tr("니가 교수","You're the Prof")}</h1><div className="tag">{tr("니가 설명해봐, 내가 채점할게","You explain, I'll grade")}</div></div>

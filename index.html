@@ -521,9 +521,22 @@ async function callGemini(system,userContent,wantJson,opts={},signal){
     else if(b.type==="image")parts.push({inline_data:{mime_type:b.source.media_type,data:b.source.data}});
     else if(b.type==="document")parts.push({inline_data:{mime_type:"application/pdf",data:b.source.data}});
   }}
+  let contents;
+  if(opts.messages){
+    contents=opts.messages.map(m=>{
+      const c=m.content,ps=[];
+      if(typeof c==="string")ps.push({text:c});
+      else for(const b of c){
+        if(b.type==="text")ps.push({text:b.text});
+        else if(b.type==="image")ps.push({inline_data:{mime_type:b.source.media_type,data:b.source.data}});
+        else if(b.type==="document")ps.push({inline_data:{mime_type:"application/pdf",data:b.source.data}});
+      }
+      return{role:m.role==="assistant"?"model":"user",parts:ps};
+    });
+  }else contents=[{role:"user",parts}];
   const body={
     system_instruction:{parts:[{text:system}]},
-    contents:[{role:"user",parts}],
+    contents,
     generationConfig:{maxOutputTokens:maxTok,temperature:0.3},
   };
   const res=await fetch(
@@ -685,7 +698,7 @@ async function callClaude(system,userContent,wantJson,opts={},signal){
   const res=await fetch("https://api.anthropic.com/v1/messages",{
     method:"POST",headers:hdrs,signal,
     body:JSON.stringify({model:opts.model||CFG.model,max_tokens:maxTok,system:sysPay,
-      messages:[{role:"user",content:userContent}]}),
+      messages:opts.messages||[{role:"user",content:userContent}]}),
   });
   if(!res.ok){let m="API "+res.status;try{const j=await res.json();if(j.error?.message)m=j.error.message}catch{}throw new Error(m)}
   const data=await res.json();
@@ -1185,7 +1198,7 @@ function App(){
   async function logout(){try{await _auth.signOut();}catch(e){}setShowProfile(false);}
   function saveNick(n){const v=(n||"").trim();if(!v||!user)return;setNick(v);LS.set(nickKey(user.uid),v);}
 
-  function openStudy(id,mode){const d=LS.get(dk(id));if(!d)return;if(mode==="exam"){setActiveDeck(d);setView("exam");return;}setActiveDeck({...d,studyType:mode||d.studyType||"explain"});setView("study");}
+  function openStudy(id,mode){const d=LS.get(dk(id));if(!d)return;if(mode==="exam"){setActiveDeck(d);setView("exam");return;}if(mode==="learn"){setActiveDeck(d);setView("tutor");return;}setActiveDeck({...d,studyType:mode||d.studyType||"explain"});setView("study");}
   function openNotes(id){const d=LS.get(dk(id));if(d){setNoteDeck(d);setView("notes");}}
   function studyWeak(deck){
     const fresh=LS.get(dk(deck.id))||deck;
@@ -1274,6 +1287,7 @@ function App(){
       {view==="add"&&<AddMaterial subjects={subjects} onSave={saveSubjects} onDone={()=>{refresh();setView("home");}} onCancel={()=>setView("home")}/>}
       {view==="study"&&activeDeck&&<Study deck={activeDeck} subjects={subjects} onExit={()=>{refresh();setView("home");}}/>}
       {view==="exam"&&activeDeck&&<Exam deck={activeDeck} onExit={()=>{refresh();setView("home");}}/>}
+      {view==="tutor"&&activeDeck&&<Tutor deck={activeDeck} onExit={()=>{refresh();setView("home");}}/>}
       {view==="notes"&&noteDeck&&<WeakNotes deck={noteDeck} onBack={()=>{refresh();setView("home");}} onStudy={studyWeak}/>}
 
       <div className="footer">{tr("키와 자료는 이 기기에만 저장","Keys & data stay on this device only")} · {MODELS.find(m=>m.id===CFG.model)?.label.split(" ·")[0]||"Claude"}</div>
@@ -1559,12 +1573,13 @@ function Home({decks,subjects,onAdd,onOpen,onNotes,onChanged,nick}){
         <div onClick={()=>setPickFor(null)} style={{position:"fixed",inset:0,background:"rgba(34,28,57,.42)",zIndex:60,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
           <div onClick={e=>e.stopPropagation()} className="card" style={{maxWidth:360,width:"100%",padding:22,display:"flex",flexDirection:"column",gap:12}}>
             <div style={{fontFamily:"'Jua',sans-serif",fontSize:16,color:"var(--ink)"}}>{tr("이 자료, 어떻게 공부할래?","How do you want to study this?")}</div>
-            {[["explain","🧠",tr("이해·설명형","Explain"),tr("손글씨로 풀고 AI 채점","Write it out, AI grades")],
+            {[["learn","🎓",tr("개념 과외","Tutor"),tr("AI가 처음부터 1:1로 이해시켜주는 플립러닝","AI teaches you 1:1 first")],
+              ["explain","🧠",tr("이해·설명형","Explain"),tr("손글씨로 풀고 AI 채점","Write it out, AI grades")],
               ["quiz","📇",tr("암기·퀴즈형","Flashcards"),tr("OX·객관식·단답 즉시채점","Instant OX / choice / short")],
               ["exam","📝",tr("시험 보기","Exam"),tr("객관식+단답+서술 실전 시험 → 한 번에 채점·점수","MC+short+essay test → graded at once")]].map(([val,emo,lbl,desc])=>{
               const cur=pickFor.def===val;
               return(
-                <button key={val} className="card" onClick={()=>{const id=pickFor.id;if(val!=="exam"&&val!==pickFor.def)setMode(id,val);setPickFor(null);onOpen(id,val);}}
+                <button key={val} className="card" onClick={()=>{const id=pickFor.id;if(val!=="exam"&&val!=="learn"&&val!==pickFor.def)setMode(id,val);setPickFor(null);onOpen(id,val);}}
                   style={{textAlign:"left",padding:"14px 16px",cursor:"pointer",
                     border:"1.5px solid "+(cur?"var(--pri)":"var(--line)"),background:cur?"var(--pri-s)":"#FBFAFF"}}>
                   <div style={{fontWeight:800,color:"var(--ink)"}}>{emo} {lbl}{cur?tr(" · 기본"," · default"):""}</div>
@@ -2495,6 +2510,186 @@ function WeakNotes({deck,onBack,onStudy}){
         </div>
       )}
       <p className="hint">{tr("Lv.3 이하이거나 틀린 적 있는 개념 표시. 공부할수록 줄어들어!","Shows concepts at Lv.3 or below, or ever missed. They shrink as you study!")}</p>
+    </section>
+  );
+}
+
+/* ── 개념 과외(플립러닝) ── AI가 먼저 이해시키고, 단계마다 써보기/설명하기로 주고받는 1:1 과외 */
+function Tutor({deck:initial,onExit}){
+  const [deck,setDeck]=useState(initial);
+  const [concept,setConcept]=useState(null);
+  const [turns,setTurns]=useState([]);          // {role, content(API), img?}
+  const [busy,setBusy]=useState(false);
+  const [control,setControl]=useState(null);    // ASK | NEXT | DONE
+  const [input,setInput]=useState("");
+  const [penMode,setPenMode]=useState(false);
+  const [err,setErr]=useState("");
+  const padRef=useRef(null);
+  const sysRef=useRef("");
+  const abortRef=useRef(null);
+  const scrollRef=useRef(null);
+  const concepts=deck.concepts||[];
+
+  useEffect(()=>()=>abortRef.current?.abort(),[]);
+  useEffect(()=>{const el=scrollRef.current;if(el)el.scrollTop=el.scrollHeight;},[turns,busy]);
+
+  function tutorSystem(c){
+    const sibs=concepts.map(x=>x.name).filter(n=>n&&n!==c.name).slice(0,30).join(", ");
+    const mat=(deck.summary||deck.material||"").slice(0,4000);
+    return `너는 학생의 1:1 개인 과외 선생님이다. 지금 학생이 고른 개념은 "${c.name}"이고, "${deck.name}" 자료의 일부다.`+
+(sibs?` 같은 자료의 다른 개념들: ${sibs}.`:"")+
+(mat?`\n\n[참고 — 학생이 올린 강의자료 발췌. 이 내용에 뿌리내려 설명하고, 자료에 없는 건 일반 지식으로 보충하되 자료와 어긋나지 마라]\n${mat}\n`:"")+
+`
+
+학생은 공식을 그냥 외우기보다 "왜 그렇게 되는지"를 이해해야 문제를 푸는 사람이다. 가장 중요한 목표는 "학생이 스스로 문제를 풀 수 있는 골격을 잡아주는 것"이다. 답을 빨리 주는 것보다 개념의 흐름과 문제풀이 루틴을 만들어주는 게 중요하다. 설명은 한국어로 하되, 필요한 영어 용어는 괄호로 같이 알려줘라. 예: 확률수렴(convergence in probability), 일치추정량(consistent estimator).
+
+# 진행 방식 (가이드형 플립러닝)
+한 번에 다 쏟아붓지 말고 단계별로 끊어서 학생과 주고받아라. 한 번의 답변엔 한 단계(또는 그 일부)만 담고, 학생이 따라왔는지 확인한 뒤 넘어가라. 항상 이 4단계 흐름을 따른다.
+1단계 — 큰 질문: 이 개념이 속한 단원의 큰 질문을 한 문장으로 던져라.
+2단계 — 핵심 쪼개기: 이 개념을 두세 조각의 한 줄 의미로 압축해라. (예: LLN=어디로 가는가 / CLT=어떻게 흔들리는가)
+3단계 — 층층 설명 + 체크포인트: ①말로 된 직관 → ②아주 쉬운 숫자 예시 → ③원래 개념/문제의 수식 적용. 수식은 공식부터 던지지 말고 먼저 말로 번역한 뒤 보여주고, 기호를 하나씩 해석해라. 이 단계에선 반드시 중간중간 학생을 직접 시켜라: "이 공식 한번 써봐", "방금 설명한 거 네 말로 설명해봐", "안 보고 써봐". 학생이 직접 해본 답을 보고 막힌 지점을 짚어라.
+4단계 — 시험용 루틴: 시험장에서 바로 쓸 한 줄 판단 루틴으로 정리해라. (예: "plim·consistent 나오면 Slutsky, asymptotic variance 나오면 Delta Method.")
+
+# 답변 끝 제어 신호 (매우 중요)
+매 답변의 맨 마지막 줄에, 학생이 다음에 뭘 할지 알려주는 신호를 정확히 하나 붙여라. 이 줄은 학생에게 안 보이니 부가설명 없이 형식 그대로만:
+· CONTROL: ASK  — 방금 학생에게 직접 써보거나 설명해보라고 시켰을 때(학생 답을 기다림)
+· CONTROL: NEXT — 한 단계 설명을 끝냈고 학생이 "다음"으로 넘어가도 될 때
+· CONTROL: DONE — 4단계를 다 마치고 마지막 정리까지 끝냈을 때
+체크포인트(써봐/설명해봐)로 끝나면 거의 항상 ASK다.
+
+# 학생을 대하는 방식
+- "전혀 모르겠다/노베이스다/따로 논다"고 하면 추상적 설명을 반복하지 말고 어디서 끊겼는지부터 찾아 그 지점부터 다시. (예: "좋아, 네가 막힌 지점은 정확히 g가 갑자기 튀어나온 거야.")
+- 학생이 쓴 답(텍스트/손글씨 이미지)을 받으면: 맞았으면 어디가 좋았는지 짚고, 틀렸거나 비었으면 어디서 막혔는지 정확히 짚은 뒤 그 지점부터 다시. 그냥 정답만 던지지 마라.
+- 헷갈려하면 ①헷갈린 식 다시 써주기 ②말로 번역 ③아주 쉬운 숫자 예시 ④원래 문제로 돌아와 적용 ⑤시험용 한 줄 정리.
+- 외워야 할 것과 이해해야 할 것을 구분해줘라("이건 이해보다 암기에 가까우니 외워도 돼").
+- 말투는 친절·차분하되 과한 칭찬·감정적 위로 없이 과외하듯 정확히 이끌어라. "좋아, 지금 막힌 지점은 여기야", "복잡해 보여도 구조는 하나야", "시험장에선 이렇게 판단하면 돼" 톤. "답만/간단히"면 핵심만, "자세히/이해 안 돼"면 단계별로 길게.
+
+# 수식·표기
+수식은 LaTeX로(인라인 $...$, 디스플레이 $$...$$), 한 줄씩 나누고 중간 계산(분산·표준화·미분)을 생략하지 마라. 필요하면 마크다운 표, 라벨 있는 인라인 SVG 그래프도 써도 된다.
+
+위 예시들(LLN/CLT/Slutsky/Delta 등)은 '가르치는 방식'의 본보기일 뿐이다. 실제 내용은 학생이 고른 개념 "${c.name}"과 위 자료에 맞춰라. 지금부터 학생과 주고받으며 과외를 시작해라.`;
+  }
+
+  async function turn(userTurn,base){
+    const next=[...(base!==undefined?base:turns),userTurn];
+    setTurns(next);setBusy(true);setControl(null);setErr("");
+    const ctrl=new AbortController();abortRef.current=ctrl;
+    try{
+      const reply=await callAI(sysRef.current,"",false,
+        {maxTok:2000,cache:true,model:CFG.model,messages:next.map(t=>({role:t.role,content:t.content}))},ctrl.signal);
+      const sig=(reply.match(/CONTROL:\s*(ASK|NEXT|DONE)/i)||[])[1];
+      const clean=reply.replace(/CONTROL:\s*(ASK|NEXT|DONE)\s*$/i,"").replace(/\n+$/,"").trim();
+      setTurns(t=>[...t,{role:"assistant",content:clean}]);
+      const c=(sig||"NEXT").toUpperCase();setControl(c);
+      if(c==="DONE")markTaught();
+    }catch(e){if(e.name!=="AbortError")setErr(e.message||tr("오류가 났어. 다시 시도해줘.","Something went wrong. Try again."));}
+    setBusy(false);
+  }
+
+  function start(c){
+    abortRef.current?.abort();
+    setConcept(c);setTurns([]);setControl(null);setErr("");setInput("");setPenMode(false);
+    sysRef.current=tutorSystem(c);
+    turn({role:"user",content:`'${c.name}' 개념 과외 시작해줘. 1단계 큰 질문부터 한 단계씩.`},[]);
+  }
+  function sendText(){const t=input.trim();if(!t||busy)return;setInput("");turn({role:"user",content:t});}
+  function sendPen(){
+    if(busy)return;
+    const pad=padRef.current;
+    if(!pad||!pad.hasStrokes()){setErr(tr("먼저 손글씨로 써줘.","Write something first."));return;}
+    const b64=pad.getImageBase64();pad.clear();setPenMode(false);
+    turn({role:"user",img:b64,content:[{type:"image",source:{type:"base64",media_type:"image/png",data:b64}},{type:"text",text:"(내가 손글씨로 쓴 답이야. 읽고 피드백 줘.)"}]});
+  }
+  function quick(msg){if(busy)return;turn({role:"user",content:msg});}
+  function markTaught(){
+    if(!concept)return;
+    const fresh=LS.get(dk(deck.id))||deck;
+    const nd={...fresh,concepts:(fresh.concepts||[]).map(x=>x.id===concept.id?{...x,taughtAt:Date.now()}:x)};
+    LS.set(dk(deck.id),nd);setDeck(nd);
+  }
+
+  // ── 개념 고르기 ──
+  if(!concept)return(
+    <section className="wrap">
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+        <button className="btn gho sm" onClick={onExit}>{tr("← 목록","← Back")}</button>
+        <div style={{fontFamily:"'Jua',sans-serif",fontSize:17,color:"var(--ink)"}}>🎓 {tr("개념 과외","Tutor")} · {deck.name}</div>
+      </div>
+      <p className="hint" style={{marginBottom:14}}>{tr("개념을 하나 고르면, 선생님이 처음부터 1:1로 이해시켜줄게. 중간중간 직접 써보고 설명하면서 진짜 네 것으로 만드는 플립러닝이야.","Pick one concept and I'll teach it 1:1 from scratch — you'll write and explain along the way.")}</p>
+      <div style={{display:"flex",flexDirection:"column",gap:9}}>
+        {concepts.map(c=>(
+          <button key={c.id} className="card" onClick={()=>start(c)}
+            style={{textAlign:"left",padding:"14px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:10,border:"1.5px solid var(--line)",background:"#FBFAFF"}}>
+            <span style={{fontSize:18}}>{c.taughtAt?"✅":"🎓"}</span>
+            <span style={{flex:1,fontWeight:700,color:"var(--ink)"}}><MathText text={c.name} tag="span"/></span>
+            {c.taughtAt&&<span style={{fontSize:11,color:"var(--sub)"}}>{tr("배웠어","learned")}</span>}
+          </button>
+        ))}
+        {concepts.length===0&&<div className="empty">{tr("이 자료엔 아직 개념이 없어.","No concepts in this material yet.")}</div>}
+      </div>
+    </section>
+  );
+
+  // ── 과외 세션 ──
+  return(
+    <section className="wrap" style={{display:"flex",flexDirection:"column",minHeight:"70vh"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+        <button className="btn gho sm" onClick={()=>{abortRef.current?.abort();setConcept(null);}}>{tr("← 개념","← Concepts")}</button>
+        <div style={{flex:1,fontFamily:"'Jua',sans-serif",fontSize:15,color:"var(--ink)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}><MathText text={concept.name} tag="span"/></div>
+        <button className="btn gho sm" onClick={onExit}>{tr("목록","Home")}</button>
+      </div>
+
+      <div ref={scrollRef} style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:12,padding:"6px 2px 14px"}}>
+        {turns.filter(t=>!(t.role==="user"&&typeof t.content==="string"&&t.content.startsWith("'"+concept.name))).map((t,i)=>(
+          t.role==="assistant"?(
+            <div key={i} style={{alignSelf:"flex-start",maxWidth:"92%",background:"#fff",border:"1.5px solid var(--line)",borderRadius:"4px 16px 16px 16px",padding:"12px 15px"}}>
+              <div style={{fontSize:11,color:"var(--pri)",fontWeight:700,marginBottom:3}}>🎓 {tr("선생님","Tutor")}</div>
+              <MathText text={t.content}/>
+            </div>
+          ):(
+            <div key={i} style={{alignSelf:"flex-end",maxWidth:"88%",background:"var(--pri-s)",border:"1.5px solid var(--pri)",borderRadius:"16px 4px 16px 16px",padding:"10px 14px"}}>
+              {t.img?<img src={"data:image/png;base64,"+t.img} alt="손글씨" style={{maxWidth:"100%",borderRadius:8,display:"block"}}/>
+                :<div style={{color:"var(--ink)",lineHeight:1.6,whiteSpace:"pre-wrap"}}>{t.content}</div>}
+            </div>
+          )
+        ))}
+        {busy&&<div style={{alignSelf:"flex-start",color:"var(--sub)",fontSize:13,padding:"4px 8px"}}>🎓 {tr("선생님이 쓰는 중…","Tutor is writing…")}</div>}
+        {err&&<div className="err" style={{fontSize:13}}>{err}</div>}
+      </div>
+
+      {control==="DONE"?(
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",borderTop:"1.5px solid var(--line)",paddingTop:12}}>
+          <div style={{width:"100%",color:"var(--mint-d,#0F766E)",fontWeight:700,marginBottom:2}}>🎉 {tr("이 개념 끝! 잘 따라왔어.","Done with this concept!")}</div>
+          <button className="btn pri" onClick={()=>setConcept(null)}>{tr("다음 개념 🎓","Next concept 🎓")}</button>
+          <button className="btn gho" onClick={()=>quick("핵심만 한 번 더 짧게 정리해줘.")}>{tr("한 번 더 정리","Recap")}</button>
+        </div>
+      ):(
+        <div style={{borderTop:"1.5px solid var(--line)",paddingTop:12,display:"flex",flexDirection:"column",gap:8}}>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {control==="NEXT"&&<button className="btn pri sm" disabled={busy} onClick={()=>quick("이해했어. 다음 단계로 넘어가줘.")}>{tr("이해했어, 다음 ▶","Got it, next ▶")}</button>}
+            <button className="btn gho sm" disabled={busy} onClick={()=>quick("아직 잘 모르겠어. 어디서 막히는 건지 더 쉽게 다시 설명해줘.")}>{tr("😵 모르겠어","😵 Lost")}</button>
+          </div>
+          {penMode?(
+            <>
+              <PenPad ref={padRef} kind="answer" hideOcr penOnlyDefault={true}/>
+              <div style={{display:"flex",gap:8}}>
+                <button className="btn pri" disabled={busy} onClick={sendPen}>{tr("✍️ 손글씨 보내기","✍️ Send writing")}</button>
+                <button className="btn gho" onClick={()=>setPenMode(false)}>{tr("✕ 텍스트로","✕ Text")}</button>
+              </div>
+            </>
+          ):(
+            <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+              <textarea className="field" value={input} disabled={busy}
+                onChange={e=>setInput(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendText();}}}
+                placeholder={control==="ASK"?tr("여기에 답을 써봐 (또는 ✍️로 손글씨)","Write your answer (or ✍️)"):tr("질문하거나 답해봐…","Ask or answer…")}
+                rows={2} style={{flex:1,resize:"none",fontFamily:"inherit"}}/>
+              <button className="btn gho" title={tr("손글씨로","Handwriting")} disabled={busy} onClick={()=>{setErr("");setPenMode(true);}}>✍️</button>
+              <button className="btn pri" disabled={busy||!input.trim()} onClick={sendText}>{tr("보내기","Send")}</button>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

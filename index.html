@@ -790,11 +790,13 @@ function Prof({size=56}){
    단원평가(시험) 모드 — 이해+암기 합친 실전 시험
    출제(AI) → 응시(손글씨 보존) → 일괄 깊은 채점 → 검토. box(복습)와 독립.
 ════════════════════════════════════════════ */
-function Exam({deck,onExit}){
-  const examLang=(deck.lang||CFG.lang)==="en"?"en":"ko";
+function Exam({deck,topic,onExit}){
+  const examLang=((deck&&deck.lang)||CFG.lang)==="en"?"en":"ko";
   const T=(ko,en)=>examLang==="en"?en:ko;
-  const studyMat=deck.summary||deck.material.slice(0,8000);
+  const studyMat=deck?(deck.summary||deck.material.slice(0,8000)):"";
   const qmodel=CFG.qmodel||CFG.model;
+  const examTitle=deck?deck.name:(topic?topic.label:T("시험","Exam"));
+  const scopeId=deck?deck.id:("topic_"+((topic&&topic.id)||"x"));
 
   const [phase,setPhase]=useState("gen");     // gen | take | grading | result | error
   const [items,setItems]=useState([]);
@@ -821,18 +823,28 @@ function Exam({deck,onExit}){
     const ctrl=new AbortController();abortRef.current=ctrl;
     setPhase("gen");setErrMsg("");setGenMsg(T("시험지 만드는 중… 최상 퀄리티로 출제할게 (조금 걸려)","Building your test at top quality (takes a moment)…"));
     try{
-      const concepts=(deck.concepts||[]).map(c=>c.name).slice(0,40).join(", ");
-      const sys=
-        "너는 대학·학원 단원평가 출제위원이야. 아래 [자료] 전체를 포괄하는 실전 시험지를 만들어. 객관식(mc)·단답형(short)·서술/논술형(essay)을 적절히 섞고, 자료의 분량·깊이에 맞게 문항 수를 스스로 정해(핵심을 빠짐없이, 보통 6~12문항). 난이도는 쉬움→어려움 고루 분포.\n"+
-        "출제 규칙: ① 자료에 근거가 있는 것만 출제 ② 정답이 문제 문장에 드러나면 안 됨 ③ 객관식 오답 3개는 모두 그럴듯해야 함(흔한 오개념 활용) ④ 서술/논술형은 단계적 사고·근거 제시를 요구하는 좋은 문제 ⑤ 수식은 LaTeX($...$). ⑥ 한 개념에 치우치지 말고 자료 전반을 고르게.\n"+
-        "배점: 객관식·단답은 작게, 서술은 크게. 총합이 100점 근처가 되게 맞춰.\n"+
+      const schema=
         "반드시 JSON만 출력(코드블록 없이):\n"+
         '{"questions":[\n'+
         ' {"type":"mc","concept":"개념명","points":5,"question":"문제","choices":["A","B","C","D"],"answer":0,"solution":"정답 풀이/이유"},\n'+
         ' {"type":"short","concept":"개념명","points":5,"question":"문제","answer":"대표 정답","accept":["허용 동의어"],"solution":"부연"},\n'+
         ' {"type":"essay","concept":"개념명","points":15,"question":"문제","rubric":["채점기준1","채점기준2","채점기준3"],"model_answer":"모범답안(수식 LaTeX)"}\n'+
         "]} (answer는 정답 보기의 0-based 인덱스)";
-      const r=await callAI(sys+"\n\n[자료]:\n"+studyMat.slice(0,7000),"개념 목록: "+concepts,true,{maxTok:6000,model:qmodel,lang:examLang},ctrl.signal);
+      const commonRule=
+        "객관식(mc)·단답형(short)·서술/논술형(essay)을 적절히 섞고, 문항 수를 범위 깊이에 맞게 스스로 정해(보통 6~12문항). 난이도는 쉬움→어려움 고루.\n"+
+        "출제 규칙: ① 정답이 문제 문장에 드러나면 안 됨 ② 객관식 오답 3개는 모두 그럴듯(흔한 오개념) ③ 서술형은 단계적 풀이·근거를 요구하는 좋은 문제 ④ 수식은 LaTeX($...$) ⑤ 범위 전반을 고르게.\n"+
+        "배점: 객관식·단답은 작게, 서술은 크게. 총합 100점 근처.\n";
+      let sys,userMsg;
+      if(topic){
+        // 교과과정(목차) 기반 — 자료 없이 한국 수학 교육과정 표준 내용으로 출제
+        sys="너는 대한민국 중·고등 수학 학원의 베테랑 출제위원이야. 아래 [학년·과목]의 [단원] 범위에서, 한국 수학 교육과정 표준 내용에 근거한 실전 시험지를 만들어. 그 단원에서 실제로 시험에 자주 나오는 핵심 유형(개념·계산·증명·그래프·활용)을 빠짐없이 담아. "+commonRule+schema;
+        userMsg="[학년·과목] "+(topic.subject||"")+"\n[단원] "+(topic.unit||"")+(topic.sub?(" > "+topic.sub):"")+"\n이 단원 범위만 출제(다른 단원 내용은 섞지 마).";
+      }else{
+        const concepts=(deck.concepts||[]).map(c=>c.name).slice(0,40).join(", ");
+        sys="너는 대학·학원 단원평가 출제위원이야. 아래 [자료] 전체를 포괄하는 실전 시험지를 만들어. "+commonRule+"단, 자료에 근거가 있는 것만 출제.\n"+schema+"\n\n[자료]:\n"+studyMat.slice(0,7000);
+        userMsg="개념 목록: "+concepts;
+      }
+      const r=await callAI(sys,userMsg,true,{maxTok:6000,model:qmodel,lang:examLang},ctrl.signal);
       const arr=Array.isArray(r)?r:(r&&Array.isArray(r.questions)?r.questions:[]);
       const norm=arr.filter(q=>q&&q.question&&["mc","short","essay"].includes(q.type)).map(q=>({
         id:uid(),type:q.type,concept:q.concept||"",points:Math.max(1,Math.round(Number(q.points)||(q.type==="essay"?15:5))),
@@ -928,10 +940,10 @@ function Exam({deck,onExit}){
   function saveRecord(gr,total){
     try{
       const id=uid();
-      const rec={id,deckId:deck.id,deckName:deck.name,takenAt:Date.now(),score:total,maxScore,
+      const rec={id,scope:scopeId,title:examTitle,takenAt:Date.now(),score:total,maxScore,
         grades:gr.map(g=>({...g}))};
-      LS.set("ng:exam:"+deck.id+":"+id,rec);
-      const idxKey="ng:examidx:"+deck.id;
+      LS.set("ng:exam:"+scopeId+":"+id,rec);
+      const idxKey="ng:examidx:"+scopeId;
       const list=LS.get(idxKey)||[];
       LS.set(idxKey,[{id,takenAt:rec.takenAt,score:total,maxScore},...list].slice(0,50));
     }catch(e){console.warn("[exam] 기록 저장 실패",e);}
@@ -945,7 +957,7 @@ function Exam({deck,onExit}){
   return(
     <section className="study">
       <div className="card study-bar">
-        <span className="snm">📝 {deck.name} · {T("시험 보기","Exam")}</span>
+        <span className="snm">📝 {examTitle} · {T("시험 보기","Exam")}</span>
         {phase==="take"&&<span className="muted" style={{fontSize:11,marginLeft:"auto"}}>{T("문항 ","Q ")}{idx+1}/{items.length}</span>}
         {phase==="result"&&<span className="muted" style={{fontSize:12,marginLeft:"auto",fontWeight:800,color:"var(--pri-d)"}}>{score}/{maxScore} · {pct}%</span>}
         <button className="btn gho xs" style={{flexShrink:0,marginLeft:phase==="take"||phase==="result"?8:"auto"}} onClick={()=>{abortRef.current?.abort();onExit();}}>✕ {T("나가기","Exit")}</button>
@@ -3883,12 +3895,84 @@ function Meter({box}){
   );
 }
 
+/* ════════════════════════════════════════════
+   학원용 앱 — 개인용과 분리(#academy 링크). 교과과정 목차 → 목차별 시험.
+   엔진(Exam·채점·PenPad)은 개인용과 공유. ※ 목차는 검수·수정 가능한 초안.
+════════════════════════════════════════════ */
+const CURRICULUM=[
+  {level:"중등 수학",subjects:[
+    {id:"m1",name:"중1 수학",units:["소인수분해","정수와 유리수","문자의 사용과 식의 계산","일차방정식","좌표평면과 그래프(정비례·반비례)","기본 도형","작도와 합동","평면도형의 성질","입체도형의 성질","자료의 정리와 해석"]},
+    {id:"m2",name:"중2 수학",units:["유리수와 순환소수","단항식과 다항식의 계산","일차부등식","연립일차방정식","일차함수와 그래프","일차함수와 일차방정식","삼각형의 성질","사각형의 성질","도형의 닮음","피타고라스 정리","경우의 수와 확률"]},
+    {id:"m3",name:"중3 수학",units:["제곱근과 실수","다항식의 곱셈과 인수분해","이차방정식","이차함수","삼각비","원의 성질","대푯값과 산포도"]},
+  ]},
+  {level:"고등 수학",subjects:[
+    {id:"cm1",name:"공통수학1",units:["다항식의 연산","나머지정리와 인수분해","복소수와 이차방정식","이차방정식과 이차함수","여러 가지 방정식","여러 가지 부등식","순열과 조합","행렬과 그 연산"]},
+    {id:"cm2",name:"공통수학2",units:["평면좌표와 직선의 방정식","원의 방정식","도형의 이동","집합","명제","함수","유리함수와 무리함수"]},
+    {id:"s1",name:"수학Ⅰ",units:["지수와 로그","지수함수와 로그함수","삼각함수","사인법칙과 코사인법칙","등차수열과 등비수열","수열의 합","수학적 귀납법"]},
+    {id:"s2",name:"수학Ⅱ",units:["함수의 극한","함수의 연속","미분계수와 도함수","도함수의 활용","부정적분","정적분","정적분의 활용"]},
+    {id:"prob",name:"확률과 통계",units:["순열과 조합","이항정리","확률의 뜻과 활용","조건부확률","확률변수와 확률분포","이항분포와 정규분포","통계적 추정"]},
+    {id:"calc",name:"미적분",units:["수열의 극한","급수","지수·로그·삼각함수의 미분","여러 가지 미분법","도함수의 활용","여러 가지 적분법","정적분의 활용"]},
+  ]},
+];
+
+function AcademyApp(){
+  const [view,setView]=useState("home");   // home | exam
+  const [topic,setTopic]=useState(null);
+  const [keyReady,setKeyReady]=useState(!!(CFG.key||CFG.geminiKey));
+  const toPersonal=()=>{location.hash="";location.reload();};
+  const pickUnit=(sub,unit,ui)=>{setTopic({id:sub.id+"_"+ui,subject:sub.name,unit,label:sub.name+" · "+unit});setView("exam");};
+  const Head=()=>(
+    <div className="hd">
+      <div className="brand"><Prof size={44}/><div><h1>{tr("니가교수 학원","Academy")}</h1><div className="tag">{tr("교과과정 목차로 시험 출제","Make tests from the curriculum")}</div></div></div>
+      <div className="hd-r"><button className="btn gho sm" onClick={toPersonal}>{tr("← 개인 학습","← Personal")}</button></div>
+    </div>
+  );
+  if(!keyReady)return(<><Head/><div className="card panel"><div className="eyebrow" style={{marginBottom:8}}>{tr("API 키 입력","API key")}</div><KeyForm onSaved={()=>setKeyReady(true)} cta={tr("저장하고 시작","Save & start")}/></div></>);
+  if(view==="exam"&&topic)return(<Exam topic={topic} onExit={()=>setView("home")}/>);
+  return(<>
+    <Head/>
+    <section>
+      <div className="hero">
+        <Prof size={56}/>
+        <div>
+          <h2>{tr(<>단원을 고르면<br/>시험이 만들어져</>,<>Pick a unit,<br/>get a test</>)}</h2>
+          <p>{tr("중1~고3 수학 교과과정이야. 단원을 누르면 그 범위 실전 시험(객관식+단답+서술)을 AI가 출제하고, 다 풀면 한 번에 채점·점수까지.","Korean math, grades 7–12. Tap a unit → AI builds a real test, graded at once.")}</p>
+        </div>
+      </div>
+      {CURRICULUM.map((lv,li)=>(
+        <div key={li} style={{marginBottom:18}}>
+          <div className="eyebrow" style={{marginBottom:8}}>{lv.level}</div>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            {lv.subjects.map(sub=>(
+              <article key={sub.id} className="card" style={{padding:"15px 17px"}}>
+                <div style={{fontFamily:"'Jua',sans-serif",fontSize:16,color:"var(--ink)",marginBottom:10}}>{sub.name}</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                  {sub.units.map((u,ui)=>(
+                    <button key={ui} className="btn gho sm" onClick={()=>pickUnit(sub,u,ui)} title={tr("이 단원 시험 출제","Make a test for this unit")}>📝 {u}</button>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      ))}
+      <p className="hint" style={{marginTop:4}}>{tr("※ 목차는 초안이야 — 학원 납품 전 검수·수정해야 정확해. 더 채울 과목·단원 있으면 말해줘.","Draft curriculum — verify before delivery.")}</p>
+    </section>
+  </>);
+}
+
+function Root(){
+  const [academy,setAcademy]=useState(/academy/i.test(location.hash));
+  useEffect(()=>{const f=()=>setAcademy(/academy/i.test(location.hash));window.addEventListener("hashchange",f);return ()=>window.removeEventListener("hashchange",f);},[]);
+  return academy?<AcademyApp/>:<App/>;
+}
+
 initStorage().then(()=>{
   loadCFG();initFirebase();
-  ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);
 }).catch(e=>{
   console.error("[boot]",e);
   loadCFG();initFirebase();
-  ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);
 });
 </script>

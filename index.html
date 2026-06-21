@@ -2888,7 +2888,13 @@ function Tutor({deck:initial,onExit}){
   function markTaught(){
     if(!concept)return;
     const fresh=LS.get(dk(deck.id))||deck;
-    const nd={...fresh,concepts:(fresh.concepts||[]).map(x=>x.id===concept.id?{...x,taughtAt:Date.now()}:x)};
+    const nd={...fresh,concepts:(fresh.concepts||[]).map(x=>{
+      if(x.id!==concept.id)return x;
+      // 개념 과외 완료 → 진도율 연동: box를 '복습(자리잡음)' 단계(3)까지 올림. 이미 더 높으면 유지(심화는 시험/퀴즈로).
+      const box=Math.max(x.box||1,3);
+      const days=INTERVALS[box]??1;
+      return{...x,taughtAt:Date.now(),box,dueAt:Date.now()+days*DAY,reps:(x.reps||0)+1,lastResult:"taught",lastSeen:Date.now()};
+    })};
     LS.set(dk(deck.id),nd);setDeck(nd);
   }
 

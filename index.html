@@ -2221,6 +2221,7 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
   const pages=useRef([[]]);                 // 장(page)별 획 배열 — 장을 넘겨도 메모리에 그대로 보존됨
   const curRef=useRef(0);                   // 지금 보고 있는 장 index
   const strokes=useRef(pages.current[0]);   // 항상 현재 장을 가리키는 별칭 (기존 그리기 코드 호환)
+  const redoRef=useRef([]);                 // 다시 실행(redo) 스택 — 취소·전체지우기·지우개로 사라진 획 되살리기
   const [pgUI,setPgUI]=useState({i:0,n:1}); // 페이지 표시/버튼 갱신용
   const drawing=useRef(false);
   const eraseGesture=useRef(false);   // 지금 버튼-지우개 중인지
@@ -2231,7 +2232,9 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
   const [busy,setBusy]=useState(false);
   const [padErr,setPadErr]=useState("");
   const [hasInk,setHasInk]=useState(false);
+  const [canRedo,setCanRedo]=useState(false);   // ↪ 다시 버튼 활성화 여부
   const [penOnly,setPenOnly]=useState(penOnlyDefault);
+  const cpStroke=(s)=>({pts:s.pts.slice(),col:s.col,sz:s.sz});
 
   React.useImperativeHandle(fwdRef,()=>({
     getImageBase64:()=>exportAllPages(),
@@ -2305,15 +2308,20 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
   const pt=(e)=>{const r=canvasRef.current.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top,p:e.pressure||.5};};
   function eraseAt(x,y){
     const R=13*13;
-    const prev=strokes.current.length;
-    strokes.current=strokes.current.filter(({pts})=>
+    const before=strokes.current;
+    const kept=before.filter(({pts})=>
       !pts.some(p=>(p.x-x)*(p.x-x)+(p.y-y)*(p.y-y)<R)
     );
-    pages.current[curRef.current]=strokes.current;
-    if(strokes.current.length!==prev){redraw();setHasInk(pages.current.some(p=>p.length>0));}
+    if(kept.length!==before.length){
+      const removed=before.filter(s=>kept.indexOf(s)<0);
+      redoRef.current.push({page:curRef.current,strokes:removed.map(cpStroke)});setCanRedo(true);
+      strokes.current=kept;pages.current[curRef.current]=strokes.current;
+      redraw();setHasInk(pages.current.some(p=>p.length>0));
+    }
   }
   function startStroke(p){
     drawing.current=true;
+    redoRef.current=[];setCanRedo(false);   // 새 획을 그으면 redo 무효
     if(strokes.current.length>=500)strokes.current.shift();
     strokes.current.push({pts:[p],col:color,sz:size});
   }
@@ -2369,8 +2377,35 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
   }
   const up=()=>{drawing.current=false;eraseGesture.current=false;lastBtn.current=0;};
   const cancel=()=>{drawing.current=false;eraseGesture.current=false;lastBtn.current=0;};
-  function undo(){if(disabled)return;strokes.current.pop();redraw();setHasInk(pages.current.some(p=>p.length>0));}
-  function clearPad(){pages.current=[[]];curRef.current=0;strokes.current=pages.current[0];redraw();setHasInk(false);setPadErr("");setPgUI({i:0,n:1});}
+  function undo(){
+    if(disabled)return;
+    const popped=strokes.current.pop();
+    if(popped){redoRef.current.push({page:curRef.current,stroke:cpStroke(popped)});setCanRedo(true);}
+    redraw();setHasInk(pages.current.some(p=>p.length>0));
+  }
+  function clearPad(){
+    const hadInk=pages.current.some(p=>p.length>0);
+    const snap=pages.current.map(pg=>pg.map(cpStroke));
+    pages.current=[[]];curRef.current=0;strokes.current=pages.current[0];redraw();setHasInk(false);setPadErr("");setPgUI({i:0,n:1});
+    if(hadInk){redoRef.current=[{clearSnap:snap,cur:0}];setCanRedo(true);}   // 통째로 복구용(이전 redo는 버림)
+  }
+  function redoFn(){
+    if(disabled)return;
+    const e=redoRef.current.pop();
+    if(!e){setCanRedo(false);return;}
+    if(e.clearSnap){
+      pages.current=e.clearSnap.map(pg=>pg.map(cpStroke));
+      curRef.current=Math.min(e.cur||0,pages.current.length-1);
+      strokes.current=pages.current[curRef.current];
+      setPgUI({i:curRef.current,n:pages.current.length});
+    }else{
+      const pi=Math.min(e.page||0,pages.current.length-1);
+      curRef.current=pi;strokes.current=pages.current[pi];
+      (e.stroke?[e.stroke]:(e.strokes||[])).forEach(s=>strokes.current.push(s));
+      setPgUI({i:pi,n:pages.current.length});
+    }
+    redraw();setHasInk(pages.current.some(p=>p.length>0));setCanRedo(redoRef.current.length>0);
+  }
   async function recognize(){
     if(!hasInk){setPadErr(tr("먼저 써봐.","Write something first."));return;}
     setBusy(true);setPadErr("");
@@ -2400,8 +2435,9 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
           <span style={{minWidth:22,textAlign:"right"}}>{size}</span>
         </div>
         <div className="sep"/>
-        <button className="btn gho xs" onClick={undo} disabled={busy||disabled}>↩ 취소</button>
-        <button className="btn gho xs" onClick={clearPad} disabled={busy||disabled}>🗑️ 전체</button>
+        <button className="btn gho xs" onClick={undo} disabled={busy||disabled}>↩ {tr("취소","Undo")}</button>
+        <button className="btn gho xs" onClick={redoFn} disabled={busy||disabled||!canRedo} title={tr("실수로 취소·지운 획 되살리기","Redo — bring back undone/erased strokes")}>↪ {tr("다시","Redo")}</button>
+        <button className="btn gho xs" onClick={clearPad} disabled={busy||disabled}>🗑️ {tr("전체","Clear")}</button>
         <div className="sep"/>
         <button className={"btn gho xs"+(penOnly?" on":"")} onClick={()=>setPenOnly(v=>!v)}
           title={penOnly?tr("펜 전용 ON — 손가락 터치 무시 중 (S펜·Apple Pencil)","Pen only — ignoring finger touch (S Pen·Apple Pencil)"):tr("터치·마우스도 허용 중","Touch & mouse allowed")}>

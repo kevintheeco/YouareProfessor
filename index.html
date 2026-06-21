@@ -1008,7 +1008,12 @@ function Exam({deck,topic,onExit,student,academy,academyName}){
         "출제 규칙: ① 정답이 문제 문장에 드러나면 안 됨 ② 객관식 오답 3개는 모두 그럴듯(흔한 오개념) ③ 서술형은 단계적 풀이·근거를 요구하는 좋은 문제 ④ 수식은 LaTeX($...$) ⑤ 범위 전반을 고르게.\n"+
         "배점: 객관식·단답은 작게, 서술은 크게. 총합 100점 근처.\n";
       let sys,userMsg;
-      if(topic&&Array.isArray(topic.units)&&topic.units.length){
+      if(topic&&topic.src){
+        // 책(교재) 시험 — 선택 단원의 교재 내용(src)으로, 지정한 문항 수만큼 출제
+        const n=Math.max(1,Math.min(40,Number(topic.count)||8));
+        sys="너는 대학 전공 교재로 시험을 출제하는 전문가야. 아래 [교재 내용]에 근거해서만 실전 시험지를 만들어(교재에 없는 내용은 절대 출제 금지). 반드시 정확히 "+n+"문항만 출제해. mc(객관식)·short(단답)·essay(서술)를 적절히 섞고 난이도는 쉬움→어려움 고루. 각 문항의 'unit'에 그 문항이 속한 단원명을 넣어.\n출제 규칙: ① 정답이 문제 문장에 드러나면 안 됨 ② 객관식 오답 3개는 모두 그럴듯(흔한 오개념) ③ 서술형은 단계적 풀이·근거를 요구 ④ 수식은 LaTeX($...$) ⑤ 범위 전반을 고르게. 배점: 객관식·단답 작게, 서술 크게.\n"+schema;
+        userMsg="[총 문항 수] 정확히 "+n+"문항\n[단원] "+((topic.unitNames||[]).join(", ")||"전체")+"\n[교재 내용]:\n"+(""+topic.src).slice(0,14000);
+      }else if(topic&&Array.isArray(topic.units)&&topic.units.length){
         // 학원 레벨테스트 — 여러 단원 동시 출제(단원별 문항 수·난이도 지정), 문항마다 unit 태깅
         const lines=topic.units.map(u=>"· "+u.name+" — "+(u.count||2)+"문항, 난이도 "+(DIFF_KO[u.difficulty]||u.difficulty||"보통")).join("\n");
         const totalQ=topic.units.reduce((s,u)=>s+(Number(u.count)||0),0);
@@ -1479,6 +1484,7 @@ function App(){
   const [subjects,setSubjects]=useState(defaultSubjects());
   const [filterSubj,setFilterSubj]=useState("all");
   const [activeDeck,setActiveDeck]=useState(null);
+  const [examTopic,setExamTopic]=useState(null);   // 책 시험: 선택 단원 src+문항수 (topic 기반)
   const [noteDeck,setNoteDeck]=useState(null);
   const [user,setUser]=useState(null);
   const [nick,setNick]=useState("");
@@ -1535,7 +1541,7 @@ function App(){
   async function logout(){try{await _auth.signOut();}catch(e){}setShowProfile(false);}
   function saveNick(n){const v=(n||"").trim();if(!v||!user)return;setNick(v);LS.set(nickKey(user.uid),v);}
 
-  function openStudy(id,mode){const d=LS.get(dk(id));if(!d)return;if(mode==="exam"){setActiveDeck(d);setView("exam");return;}if(mode==="learn"){setActiveDeck(d);setView("tutor");return;}setActiveDeck({...d,studyType:mode||d.studyType||"explain"});setView("study");}
+  function openStudy(id,mode){const d=LS.get(dk(id));if(!d)return;if(mode==="exam"){setExamTopic(null);setActiveDeck(d);setView("exam");return;}if(mode==="learn"){setActiveDeck(d);setView("tutor");return;}setActiveDeck({...d,studyType:mode||d.studyType||"explain"});setView("study");}
   // 책 소주제 하나만 집중 학습(이해=explain / 암기=quiz). focusId로 그 개념만 출제.
   function openConcept(deckId,conceptId,mode){const d=LS.get(dk(deckId));if(!d)return;setActiveDeck({...d,studyType:mode||"explain",focusId:conceptId});setView("study");}
   function openNotes(id){const d=LS.get(dk(id));if(d){setNoteDeck(d);setView("notes");}}
@@ -1625,8 +1631,8 @@ function App(){
       )}
       {view==="add"&&<AddMaterial subjects={subjects} onSave={saveSubjects} onDone={()=>{refresh();setView("home");}} onCancel={()=>setView("home")}/>}
       {view==="study"&&activeDeck&&<Study deck={activeDeck} subjects={subjects} onExit={()=>{refresh();setView("home");}}/>}
-      {view==="exam"&&activeDeck&&<Exam deck={activeDeck} onExit={()=>{refresh();setView("home");}}/>}
-      {view==="tutor"&&activeDeck&&<Tutor deck={activeDeck} onExit={()=>{refresh();setView("home");}} onPractice={(cid,mode)=>openConcept(activeDeck.id,cid,mode)}/>}
+      {view==="exam"&&(activeDeck||examTopic)&&<Exam deck={examTopic?null:activeDeck} topic={examTopic} onExit={()=>{setExamTopic(null);refresh();setView("home");}}/>}
+      {view==="tutor"&&activeDeck&&<Tutor deck={activeDeck} onExit={()=>{refresh();setView("home");}} onPractice={(cid,mode)=>openConcept(activeDeck.id,cid,mode)} onExam={(topic)=>{setExamTopic(topic);setView("exam");}}/>}
       {view==="notes"&&noteDeck&&<WeakNotes deck={noteDeck} onBack={()=>{refresh();setView("home");}} onStudy={studyWeak}/>}
 
       <div className="footer">{tr("키와 자료는 이 기기에만 저장","Keys & data stay on this device only")} · {MODELS.find(m=>m.id===CFG.model)?.label.split(" ·")[0]||"Claude"}</div>
@@ -2908,7 +2914,7 @@ function WeakNotes({deck,onBack,onStudy}){
 }
 
 /* ── 개념 과외(플립러닝) ── AI가 먼저 이해시키고, 단계마다 써보기/설명하기로 주고받는 1:1 과외 */
-function Tutor({deck:initial,onExit,onPractice}){
+function Tutor({deck:initial,onExit,onPractice,onExam}){
   const [deck,setDeck]=useState(initial);
   const [concept,setConcept]=useState(null);
   const [turns,setTurns]=useState([]);          // {role, content(API), img?}
@@ -2921,6 +2927,9 @@ function Tutor({deck:initial,onExit,onPractice}){
   const [stream,setStream]=useState("");        // 스트리밍: 도착 중인 교수님 답(글자씩)
   const [options,setOptions]=useState([]);      // 교수님이 준 '탭해서 고르기' 보기(OPTIONS:)
   const [openU,setOpenU]=useState({});          // 책 모드 목차 트리: 펼친 대/중단원
+  const [examOpen,setExamOpen]=useState(false); // 책 시험 빌더 표시
+  const [examSel,setExamSel]=useState({});      // 시험 출제 대단원 선택 {u1:bool}
+  const [examN,setExamN]=useState(10);          // 시험 문항 수
   const padRef=useRef(null);
   const sysRef=useRef("");
   const abortRef=useRef(null);
@@ -3039,6 +3048,17 @@ OPTIONS: 보기1 | 보기2 | 보기3
     sysRef.current=tutorSystem(c);
     turn({role:"user",content:`'${c.name}' 개념 과외 시작해 주세요. 1단계 큰 질문부터 한 단계씩.`},[]);
   }
+  // 책 시험: 선택한 대단원들의 src를 모아 문항 수 지정해 출제(Exam topic으로)
+  function startBookExam(){
+    if(!onExam)return;
+    const picked=Object.keys(examSel).filter(k=>examSel[k]);
+    const chosen=picked.length?concepts.filter(c=>picked.includes(c.u1||"본문")):concepts;
+    if(!chosen.length){setErr(tr("출제할 단원을 골라줘.","Pick at least one unit."));return;}
+    const src=chosen.map(c=>"["+(c.u1||"")+(c.u2?" > "+c.u2:"")+" / "+c.name+"]\n"+(c.src||c.name)).join("\n\n");
+    const unitNames=[...new Set(chosen.map(c=>c.u1).filter(Boolean))];
+    const n=Math.max(1,Math.min(40,Number(examN)||10));
+    onExam({id:deck.id+"_be"+Date.now().toString(36),label:deck.name+" "+tr("시험","Exam"),src,count:n,unitNames});
+  }
   // 학생이 '과제(ASK/COPY/RECALL)' 답을 막 냈을 때만, 모델에게 '피드백 먼저, 새 과제 점프 금지'를 숨겨서 상기시킨다(채팅엔 안 보임).
   function fbHint(){
     return (control==="ASK"||control==="COPY"||control==="RECALL")
@@ -3075,7 +3095,37 @@ OPTIONS: 보기1 | 보기2 | 보기3
         <button className="btn gho sm" onClick={onExit}>{tr("← 목록","← Back")}</button>
         <div style={{fontFamily:"'Jua',sans-serif",fontSize:17,color:"var(--ink)"}}>🎓 {tr("개념 과외","Tutor")} · {deck.name}</div>
       </div>
-      <p className="hint" style={{marginBottom:14}}>{tr("개념을 하나 고르면, 교수님이 처음부터 1:1로 이해시켜줄게. 중간중간 직접 써보고 설명하면서 진짜 네 것으로 만드는 플립러닝이야.","Pick one concept and I'll teach it 1:1 from scratch — you'll write and explain along the way.")}</p>
+      <p className="hint" style={{marginBottom:14}}>{tr("개념을 하나 고르면, 교수님이 처음부터 1:1로 이해시켜줄게. 옆 🧠이해문제로 그 소단원만 풀 수도 있어. 시험은 위 버튼에서 단원을 골라 봐.","Pick a concept for 1:1 tutoring. Use 🧠 for that sub-topic's practice. Build a test from the button above.")}</p>
+      {concepts.some(c=>c.u1)&&onExam&&(examOpen?(
+        <div style={{border:"1.5px solid var(--pri)",borderRadius:14,padding:"14px 15px",marginBottom:12,background:"#FBFAFF",display:"flex",flexDirection:"column",gap:10}}>
+          <div style={{fontWeight:800,color:"var(--pri-d)",fontSize:14}}>📝 {tr("시험 만들기","Build a test")}</div>
+          <div style={{fontSize:12,color:"var(--sub)"}}>{tr("출제할 단원을 골라줘 (안 고르면 전체 범위)","Pick units to test (none = whole book)")}</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:240,overflowY:"auto"}}>
+            {[...new Set(concepts.map(c=>c.u1||"본문"))].map(u1=>{
+              const cnt=concepts.filter(c=>(c.u1||"본문")===u1).length;
+              return(
+                <label key={u1} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",border:"1px solid var(--line)",borderRadius:10,cursor:"pointer",background:examSel[u1]?"var(--pri-s)":"#fff"}}>
+                  <input type="checkbox" checked={!!examSel[u1]} onChange={e=>setExamSel(s=>({...s,[u1]:e.target.checked}))} style={{width:16,height:16,accentColor:"var(--pri)",flexShrink:0}}/>
+                  <span style={{flex:1,minWidth:0,fontSize:13,fontWeight:600}}><MathText text={u1} tag="span"/></span>
+                  <span style={{fontSize:11,color:"var(--sub)",flexShrink:0}}>{cnt}{tr("개","")}</span>
+                </label>
+              );
+            })}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:13,fontWeight:600}}>{tr("문항 수","Questions")}</span>
+            <input type="number" min="1" max="40" value={examN} onChange={e=>setExamN(e.target.value)} style={{width:72,padding:"7px 9px",border:"1.5px solid var(--line)",borderRadius:9,fontSize:14,outline:"none"}}/>
+            <span style={{fontSize:11,color:"var(--sub)"}}>{tr("(1~40)","")}</span>
+          </div>
+          {err&&<div className="err" style={{fontSize:13}}>{err}</div>}
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn pri" onClick={startBookExam}>📝 {tr("시험 시작","Start test")}</button>
+            <button className="btn gho" onClick={()=>{setExamOpen(false);setErr("");}}>{tr("취소","Cancel")}</button>
+          </div>
+        </div>
+      ):(
+        <button className="btn gho" onClick={()=>setExamOpen(true)} style={{marginBottom:12,borderColor:"var(--pri)",color:"var(--pri-d)",fontWeight:700}}>📝 {tr("시험 보기 — 단원 골라 출제","Take a test — pick units")}</button>
+      ))}
       <div style={{display:"flex",flexDirection:"column",gap:9}}>
         {concepts.length===0&&<div className="empty">{tr("이 자료엔 아직 개념이 없어.","No concepts in this material yet.")}</div>}
         {(()=>{
@@ -3087,10 +3137,8 @@ OPTIONS: 보기1 | 보기2 | 보기3
                 <span style={{flex:1,minWidth:0,fontWeight:600,color:"var(--ink)"}}><MathText text={c.name} tag="span"/></span>
                 {c.taughtAt&&<span style={{fontSize:11,color:"var(--sub)",flexShrink:0}}>{tr("배웠어","learned")}</span>}
               </button>
-              {onPractice&&<button title={tr("이해 문제 풀이","Practice — understand")} onClick={()=>onPractice(c.id,"explain")}
-                style={{flexShrink:0,padding:"0 11px",fontSize:15,cursor:"pointer",border:"1.5px solid var(--line)",borderRadius:11,background:"#FBFAFF"}}>🧠</button>}
-              {onPractice&&<button title={tr("암기 문제 풀이","Practice — memorize")} onClick={()=>onPractice(c.id,"quiz")}
-                style={{flexShrink:0,padding:"0 11px",fontSize:15,cursor:"pointer",border:"1.5px solid var(--line)",borderRadius:11,background:"#FBFAFF"}}>📇</button>}
+              {onPractice&&<button title={tr("이해 문제 풀이","Practice — understanding")} onClick={()=>onPractice(c.id,"explain")}
+                style={{flexShrink:0,padding:"0 12px",fontSize:12.5,fontWeight:700,cursor:"pointer",border:"1.5px solid var(--pri)",color:"var(--pri-d)",borderRadius:11,background:"var(--pri-s)",whiteSpace:"nowrap"}}>🧠 {tr("이해문제","Practice")}</button>}
             </div>
           );
           if(!concepts.some(c=>c.u1))return concepts.map(leaf);   // 일반 덱: 평탄 목록

@@ -878,6 +878,8 @@ function Exam({deck,topic,onExit,student,academy,academyName}){
   const [genMsg,setGenMsg]=useState("");
   const [gradeProg,setGradeProg]=useState(0);
   const [errMsg,setErrMsg]=useState("");
+  const [analysis,setAnalysis]=useState(null);     // 학생 총체 분석(AI) {overall,praise,strengths,growth,advice}
+  const [analysisBusy,setAnalysisBusy]=useState(false);
 
   const padRef=useRef(null);
   const inkRef=useRef({});                     // {qid:{pages,w,h}}
@@ -960,7 +962,7 @@ function Exam({deck,topic,onExit,student,academy,academyName}){
     if(!confirm(msg))return;
     abortRef.current?.abort();
     const ctrl=new AbortController();abortRef.current=ctrl;
-    setPhase("grading");setGradeProg(0);
+    setPhase("grading");setGradeProg(0);setAnalysis(null);
     const ans=answersRef.current;
     const tasks=items.map((q,i)=>({q,i,ans:ans[i]||{},ink:inkRef.current[q.id]}));
     const out=new Array(items.length);let done=0;
@@ -976,7 +978,28 @@ function Exam({deck,topic,onExit,student,academy,academyName}){
     await Promise.all(lanes.map(worker));
     if(ctrl.signal.aborted)return;
     const total=out.reduce((s,g)=>s+(g&&g.score||0),0);
-    setGrades(out);setScore(total);saveRecord(out,total);setIdx(0);setPhase("result");
+    setGrades(out);setScore(total);setIdx(0);setPhase("result");
+    const key=saveRecord(out,total);
+    analyzeStudent(out,total,ctrl.signal).then(a=>{ if(a&&key){try{const r=LS.get(key);if(r){r.analysis=a;LS.set(key,r);}}catch{}} });
+  }
+
+  // 학생 총체 분석(시험 전체를 보고 복합·심층 분석 + 문항 근거 예시 + 확실한 칭찬). 채점 뒤 1콜.
+  async function analyzeStudent(out,total,signal){
+    setAnalysisBusy(true);
+    try{
+      const us=aggUnits(out);
+      const unitLines=us.map(u=>u.unit+": "+u.rate+"% ("+u.sc+"/"+u.pts+")").join(" / ");
+      const cut=(s)=>(s||"").toString().replace(/\s+/g," ").slice(0,90);
+      const qlines=out.map((g,i)=>(i+1)+"번 ["+TYPE_LABEL(g.type)+"·"+(g.unit||g.concept||"기타")+"] "+(g.score||0)+"/"+(g.points||0)+"점 "+(g.verdict||"")+" | 핵심:"+cut(g.essence)+" | 잘함:"+cut(g.gotIt)+" | 갭:"+cut(g.gap)).join("\n");
+      const sys=
+        "너는 수학 학원의 베테랑 진단 선생님이다. 한 학생의 시험 전체를 보고 '총체적이고 심층적인' 분석을 한다. 단순 점수 나열이 아니라 학생의 사고 특성을 읽어라 — 수학적 감각·사고력, 개념 간 유기성(개념을 따로따로 아는지 서로 연결하는지), 계산 능력, 영역 편차(예: 도형 약함), 실수 빈도(아는데 틀리는지), 답은 맞아도 풀이에 핵심개념이 빠졌는지 등을 복합적으로 짚어라. 반드시 구체적 문항을 근거로 들어라(예: '2번은 맞았지만 핵심개념이 풀이에서 누락'). 칭찬할 점은 분명하고 구체적으로 칭찬해라. 따뜻하지만 정확하게, 학부모가 읽을 상담 소견 톤(반말 금지, 존중하는 평어체).\n"+
+        "수식·기호는 LaTeX($...$). 반드시 JSON만 출력(코드블록 없이):\n"+
+        '{"overall":"학생의 큰 그림 2~4문장(수학적 감/사고력/개념 유기성 등)","praise":["확실히 칭찬할 점 1~3개, 구체적으로"],"strengths":[{"label":"강점 한마디","evidence":"몇 번 문항을 근거로 구체적으로"}],"growth":[{"label":"성장이 필요한 영역 한마디","evidence":"몇 번 문항 근거로 구체적으로(예: n번은 맞았지만 핵심개념 누락)"}],"advice":"앞으로의 학습 방향 1~2가지 구체 제언"}';
+      const usr="[학생] "+(student||"학생")+"\n[시험] "+examTitle+"\n[총점] "+total+"/"+maxScore+" ("+(maxScore?Math.round(total/maxScore*100):0)+"%)\n[단원별] "+unitLines+"\n[문항별]\n"+qlines;
+      const r=await callAI(sys,usr,true,{maxTok:1800,lang:examLang},signal);
+      if(r&&(r.overall||(r.strengths&&r.strengths.length)||(r.praise&&r.praise.length))){setAnalysis(r);setAnalysisBusy(false);return r;}
+    }catch(e){if(e.name!=="AbortError")console.warn("[exam] 분석 실패",e);}
+    setAnalysisBusy(false);return null;
   }
 
   async function gradeOne({q,ans,ink},signal){
@@ -1034,16 +1057,41 @@ function Exam({deck,topic,onExit,student,academy,academyName}){
       const id=uid();
       const rec={id,scope:scopeId,title:examTitle,studentName:student||"",takenAt:Date.now(),score:total,maxScore,
         byUnit:aggUnits(gr),grades:gr.map(g=>({...g}))};
-      LS.set("ng:exam:"+scopeId+":"+id,rec);
+      const key="ng:exam:"+scopeId+":"+id;
+      LS.set(key,rec);
       const idxKey="ng:examidx:"+scopeId;
       const list=LS.get(idxKey)||[];
       LS.set(idxKey,[{id,takenAt:rec.takenAt,score:total,maxScore},...list].slice(0,50));
-    }catch(e){console.warn("[exam] 기록 저장 실패",e);}
+      return key;
+    }catch(e){console.warn("[exam] 기록 저장 실패",e);return null;}
   }
 
   const pct=maxScore?Math.round(score/maxScore*100):0;
   const vColor=(v)=>v==="correct"?"#1E9E5A":v==="incorrect"?"#D9534F":"#C98A00";
   const vLabel=(v)=>v==="correct"?T("정답","Correct"):v==="incorrect"?T("오답","Wrong"):T("부분","Partial");
+
+  // 학생 총체 분석 렌더(결과 화면·학부모 리포트 공용). analysis 없으면 null.
+  function analysisInner(){
+    const a=analysis; if(!a)return null;
+    const lblS=(c)=>({fontWeight:800,color:c,fontSize:12.5,marginBottom:4,marginTop:2});
+    const itemS={fontSize:13.5,lineHeight:1.65,marginBottom:3};
+    return [
+      a.overall?<div key="ov" style={{margin:"0 0 12px",lineHeight:1.75,fontSize:14}}><MathText text={a.overall} tag="span"/></div>:null,
+      (a.praise&&a.praise.length)?<div key="pr" style={{marginBottom:11}}>
+        <div style={lblS("#065F46")}>👏 {T("이런 점이 좋아요","What's great")}</div>
+        {a.praise.map((p,i)=><div key={i} style={itemS}>· <MathText text={String(p)} tag="span"/></div>)}
+      </div>:null,
+      (a.strengths&&a.strengths.length)?<div key="st" style={{marginBottom:11}}>
+        <div style={lblS("var(--pri-d)")}>💪 {T("강점","Strengths")}</div>
+        {a.strengths.map((s,i)=><div key={i} style={itemS}>· <b><MathText text={String(s.label||"")} tag="span"/></b>{s.evidence?<> — <MathText text={String(s.evidence)} tag="span"/></>:null}</div>)}
+      </div>:null,
+      (a.growth&&a.growth.length)?<div key="gr" style={{marginBottom:11}}>
+        <div style={lblS("#9B1C1C")}>🌱 {T("성장이 필요한 부분","Growth areas")}</div>
+        {a.growth.map((s,i)=><div key={i} style={itemS}>· <b><MathText text={String(s.label||"")} tag="span"/></b>{s.evidence?<> — <MathText text={String(s.evidence)} tag="span"/></>:null}</div>)}
+      </div>:null,
+      a.advice?<div key="ad" style={{background:"#fff",border:"1px solid var(--pri)",borderRadius:10,padding:"10px 13px",fontSize:13.5,lineHeight:1.65}}><b style={{color:"var(--pri-d)"}}>🎯 {T("학습 제언","Advice")}:</b> <MathText text={String(a.advice)} tag="span"/></div>:null
+    ];
+  }
 
   // ── 렌더 ──
   return(
@@ -1152,6 +1200,13 @@ function Exam({deck,topic,onExit,student,academy,academyName}){
                 </div>
               </div>
             ):null;})()}
+            {/* 총체 분석 */}
+            {(analysis||analysisBusy)&&(
+              <div style={{marginBottom:16,border:"1.5px solid var(--line)",borderRadius:12,padding:"13px 15px"}}>
+                <div style={{fontFamily:"'Jua',sans-serif",fontSize:15,color:"var(--ink)",marginBottom:8}}>🧠 {T("총체 분석","Overall analysis")}</div>
+                {analysis?analysisInner():<div style={{color:"var(--sub)",fontSize:13,display:"flex",alignItems:"center",gap:8}}><span className="spinner" style={{width:16,height:16}}/>{T("학생 전체를 보고 심층 분석 작성 중…","Analyzing the whole test…")}</div>}
+              </div>
+            )}
             {/* 문항 네비 */}
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
               <button className="btn gho sm" onClick={()=>setIdx(i=>Math.max(0,i-1))} disabled={idx<=0}>◀</button>
@@ -1223,9 +1278,9 @@ function Exam({deck,topic,onExit,student,academy,academyName}){
               <div style={{marginLeft:"auto",fontFamily:"'Jua',sans-serif",fontSize:22,color:pct>=80?"var(--mint)":pct>=60?"var(--gold)":"var(--rose)"}}>{score}/{maxScore} <span style={{fontSize:14,color:"var(--sub)"}}>({pct}%)</span></div>
             </div>
             {/* 종합 소견 */}
-            <div style={{background:"var(--pri-s)",borderRadius:12,padding:"13px 16px",marginBottom:18,lineHeight:1.7,fontSize:14}}>
-              <div style={{fontWeight:800,color:"var(--pri-d)",marginBottom:4}}>📋 {T("종합 소견","Summary")}</div>
-              {summary}
+            <div style={{background:"var(--pri-s)",borderRadius:12,padding:"14px 16px",marginBottom:18,lineHeight:1.7,fontSize:14}}>
+              <div style={{fontWeight:800,color:"var(--pri-d)",marginBottom:6}}>📋 {T("종합 소견","Summary")}</div>
+              {analysis?analysisInner():(analysisBusy?<div style={{color:"var(--sub)",fontSize:13}}>{T("심층 분석 작성 중… 곧 표시됩니다.","Analyzing… will appear shortly.")}</div>:summary)}
             </div>
             {/* 단원별 진단 표 */}
             <div style={{fontFamily:"'Jua',sans-serif",fontSize:15,color:"var(--ink)",marginBottom:8}}>📊 {T("단원별 진단","By unit")}</div>

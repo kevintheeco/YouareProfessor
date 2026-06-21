@@ -3006,6 +3006,7 @@ function Tutor({deck:initial,onExit,onPractice,onExam}){
 # 탭해서 고르기 (OPTIONS) — 손으로 안 쓰고 누르게
 학생이 '고르기'만 하면 되는 질문을 할 땐, 답변 끝(CONTROL 줄 바로 위 줄)에 보기를 이 형식으로 붙여라:
 OPTIONS: 보기1 | 보기2 | 보기3
+보기 구분은 반드시 양옆에 공백을 둔 ' | '(스페이스+막대+스페이스)로만 한다. 보기 안 수식에서 절댓값·조건부확률의 세로막대는 구분자와 헷갈리니 |…| 대신 \lvert…\rvert, P(A\mid B) 처럼 LaTeX 명령으로 써라(맨 | 금지). 수식은 항상 $…$로 감싸라.
 그러면 학생이 손글씨 대신 버튼으로 탭해 고른다. 보기는 2~4개, 각각 한 구절로 짧게.
 **★ 절대 규칙: 답이 정해진 몇 개(특히 2개) 중 하나로 갈리는 질문은 산문으로만 묻지 말고 반드시 OPTIONS를 붙여라.** 여기 해당:
 - 양자택일("A 편이야, 아니면 B 편이야?", "~하는 게 맞을까 아니면 ~일까?") → 그 두 갈래를 그대로 보기로.
@@ -3069,7 +3070,8 @@ OPTIONS: 보기1 | 보기2 | 보기3
       const c=(sig||"NEXT").toUpperCase();setControl(c);
       // '탭해서 고르기' 보기 — 직접 써야 하는 과제(COPY/RECALL)엔 무시
       const om=reply.match(/OPTIONS:\s*([^\n]+)/i);
-      setOptions((c==="COPY"||c==="RECALL"||!om)?[]:om[1].split("|").map(s=>s.trim()).filter(Boolean).slice(0,4));
+      // 분리자는 양옆 공백 있는 ' | '만 — LaTeX 절댓값 |x|·조건부확률 P(A|B)이 쪼개지지 않게
+      setOptions((c==="COPY"||c==="RECALL"||!om)?[]:om[1].split(/\s+\|\s+/).map(s=>s.trim()).filter(Boolean).slice(0,4));
       // 손글씨로 직접 쓰는 게 핵심 → 매 턴 손글씨 패드를 기본으로 펼침(타이핑은 '✕ 텍스트로'). RECALL은 직전 설명을 가려 '백지'로.
       setPenMode(true);
       setHidePeek(c==="RECALL");

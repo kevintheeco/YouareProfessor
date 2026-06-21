@@ -2250,11 +2250,11 @@ const PenPad=React.forwardRef(function PenPad({kind,onText,disabled,hideOcr,penO
           </div>
         );})}
       </div>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8,flexWrap:"wrap"}}>
-        <button className="btn gho" style={{flex:"1 1 84px",minHeight:42,fontSize:14}} onClick={()=>showPage(curRef.current-1)} disabled={disabled||pgUI.i<=0}>◀ {tr("이전 장","Prev")}</button>
-        <span style={{minWidth:62,textAlign:"center",fontSize:13.5,fontWeight:700,color:"var(--pri-d)"}}>{pgUI.i+1} / {pgUI.n} {tr("장","pg")}</span>
-        <button className="btn gho" style={{flex:"1 1 84px",minHeight:42,fontSize:14}} onClick={()=>showPage(curRef.current+1)} disabled={disabled||pgUI.i>=pgUI.n-1}>{tr("다음 장","Next")} ▶</button>
-        <button className="btn pri" style={{flex:"1 1 96px",minHeight:42,fontSize:14}} onClick={addPage} disabled={disabled}>+ {tr("새 장","New page")}</button>
+      <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8,flexWrap:"wrap"}}>
+        <button className="btn gho xs" style={{flex:"0 1 auto"}} onClick={()=>showPage(curRef.current-1)} disabled={disabled||pgUI.i<=0}>◀ {tr("이전","Prev")}</button>
+        <span style={{minWidth:54,textAlign:"center",fontSize:12,fontWeight:700,color:"var(--pri-d)"}}>{pgUI.i+1} / {pgUI.n} {tr("장","pg")}</span>
+        <button className="btn gho xs" style={{flex:"0 1 auto"}} onClick={()=>showPage(curRef.current+1)} disabled={disabled||pgUI.i>=pgUI.n-1}>{tr("다음","Next")} ▶</button>
+        <button className="btn pri xs" style={{flex:"0 1 auto",marginLeft:"auto"}} onClick={addPage} disabled={disabled}>+ {tr("새 장","New page")}</button>
       </div>
       {!hideOcr&&(
         <div className="pen-bottom">
@@ -2684,7 +2684,7 @@ function Tutor({deck:initial,onExit}){
   const [busy,setBusy]=useState(false);
   const [control,setControl]=useState(null);    // ASK | NEXT | DONE | COPY | RECALL
   const [input,setInput]=useState("");
-  const [penMode,setPenMode]=useState(false);
+  const [penMode,setPenMode]=useState(true);   // 손글씨 우선 — 타이핑은 '✕ 텍스트로'
   const [hidePeek,setHidePeek]=useState(false);  // RECALL(백지 회상): 직전 선생님 말풍선 가리기
   const [err,setErr]=useState("");
   const padRef=useRef(null);
@@ -2746,8 +2746,8 @@ function Tutor({deck:initial,onExit}){
       const clean=reply.replace(/CONTROL:\s*(ASK|NEXT|DONE|COPY|RECALL)\s*$/i,"").replace(/\n+$/,"").trim();
       setTurns(t=>[...t,{role:"assistant",content:clean}]);
       const c=(sig||"NEXT").toUpperCase();setControl(c);
-      // 능동 과제: 손글씨로 직접 쓰는 게 핵심 → 패드 자동 펼침. RECALL은 직전 설명을 가려 '백지'로.
-      setPenMode(c==="COPY"||c==="RECALL");
+      // 손글씨로 직접 쓰는 게 핵심 → 매 턴 손글씨 패드를 기본으로 펼침(타이핑은 '✕ 텍스트로'). RECALL은 직전 설명을 가려 '백지'로.
+      setPenMode(true);
       setHidePeek(c==="RECALL");
       if(c==="DONE")markTaught();
     }catch(e){if(e.name!=="AbortError")setErr(e.message||tr("오류가 났어. 다시 시도해줘.","Something went wrong. Try again."));}
@@ -2756,7 +2756,7 @@ function Tutor({deck:initial,onExit}){
 
   function start(c){
     abortRef.current?.abort();
-    setConcept(c);setTurns([]);setControl(null);setErr("");setInput("");setPenMode(false);
+    setConcept(c);setTurns([]);setControl(null);setErr("");setInput("");setPenMode(true);
     sysRef.current=tutorSystem(c);
     turn({role:"user",content:`'${c.name}' 개념 과외 시작해줘. 1단계 큰 질문부터 한 단계씩.`},[]);
   }

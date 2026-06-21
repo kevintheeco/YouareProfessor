@@ -2767,6 +2767,25 @@ function Tutor({deck:initial,onExit}){
   }
   // 스트리밍 표시용: 끝의 CONTROL 신호는 화면에 안 보이게 떼고 보여줌
   const stripCtrl=s=>s.replace(/\n*CONTROL:[\s\S]*$/i,"").trimEnd();
+  // 스트리밍 중 아직 안 닫힌 마지막 수식($···, $$···)은 날 LaTeX로 깨져 보임 → 닫히기 전까진 빼고 표시(완성되면 나타남)
+  function trimOpenMath(s){
+    let cut=s.length,i=0;
+    while(i<s.length){
+      if(s[i]==="\\"&&s[i+1]==="$"){i+=2;continue;}        // 통화 \$ 는 수식 아님
+      if(s[i]==="$"&&s[i+1]==="$"){                          // 디스플레이 $$..$$
+        const c=s.indexOf("$$",i+2);
+        if(c<0){cut=i;break;}                                // 안 닫힘 → 여기부터 숨김
+        i=c+2;continue;
+      }
+      if(s[i]==="$"){                                        // 인라인 $..$
+        const c=s.indexOf("$",i+1);
+        if(c<0){cut=i;break;}                                // 안 닫힘
+        i=c+1;continue;
+      }
+      i++;
+    }
+    return cut<s.length?s.slice(0,cut).trimEnd():s;
+  }
 
   async function turn(userTurn,base){
     const next=[...(base!==undefined?base:turns),userTurn];
@@ -2776,7 +2795,7 @@ function Tutor({deck:initial,onExit}){
     try{
       const reply=await callAI(sysRef.current,"",false,
         {maxTok:2000,cache:true,model:CFG.model,messages:next.map(t=>({role:t.role,content:t.content})),
-         onDelta:full=>setStream(stripCtrl(full))},ctrl.signal);
+         onDelta:full=>setStream(trimOpenMath(stripCtrl(full)))},ctrl.signal);
       setStream("");
       const sig=(reply.match(/CONTROL:\s*(ASK|NEXT|DONE|COPY|RECALL)/i)||[])[1];
       const clean=reply.replace(/CONTROL:\s*(ASK|NEXT|DONE|COPY|RECALL)\s*$/i,"").replace(/\n+$/,"").trim();

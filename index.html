@@ -4675,21 +4675,21 @@ function _renderInline(text,kp){
 }
 /* ── 로딩 중 응원 문구 (회전) ── */
 const CHEERS=[
-  "너는 오늘도 사랑받는 존재야 💜",
-  "난 네가 참 자랑스러워",
-  "너는 하나밖에 없는 걸작품이야 ✨",
-  "나는 너의 앞길을 응원해",
-  "두려워하거나 걱정하지 마!",
-  "오늘도 담대하게, 화이팅! 🔥",
-  "지금 이 노력, 분명히 너를 키우고 있어 🌱",
-  "조급해 말고 한 걸음씩 — 넌 잘하고 있어",
-  "어제의 너보다 오늘의 네가 더 단단해",
-  "막혀도 괜찮아, 막힌 만큼 자라는 거야",
+  ["너는 오늘도 사랑받는 존재야 💜","You are loved, today and always 💜"],
+  ["난 네가 참 자랑스러워","I'm so proud of you"],
+  ["너는 하나밖에 없는 걸작품이야 ✨","You're a one-of-a-kind masterpiece ✨"],
+  ["나는 너의 앞길을 응원해","I'm cheering for your journey"],
+  ["두려워하거나 걱정하지 마!","Don't be afraid or anxious!"],
+  ["오늘도 담대하게, 화이팅! 🔥","Be bold today — you've got this! 🔥"],
+  ["지금 이 노력, 분명히 너를 키우고 있어 🌱","This effort is growing you, for sure 🌱"],
+  ["조급해 말고 한 걸음씩 — 넌 잘하고 있어","One step at a time — you're doing great"],
+  ["어제의 너보다 오늘의 네가 더 단단해","You're stronger today than yesterday"],
+  ["막혀도 괜찮아, 막힌 만큼 자라는 거야","Stuck is okay — that's where you grow"],
 ];
 function Cheer({style}){
   const [i,setI]=useState(()=>Math.floor(Math.random()*CHEERS.length));
   useEffect(()=>{const t=setInterval(()=>setI(v=>(v+1)%CHEERS.length),3500);return()=>clearInterval(t);},[]);
-  return <div style={{fontSize:13,color:"var(--pri-d)",fontWeight:600,textAlign:"center",lineHeight:1.6,transition:"opacity .3s",...style}}>💛 {CHEERS[i]}</div>;
+  return <div style={{fontSize:13,color:"var(--pri-d)",fontWeight:600,textAlign:"center",lineHeight:1.6,transition:"opacity .3s",...style}}>💛 {tr(CHEERS[i][0],CHEERS[i][1])}</div>;
 }
 
 function MathText({text,tag:Tag="p",className,style}){

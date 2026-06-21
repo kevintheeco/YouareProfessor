@@ -292,11 +292,25 @@ function _idbAll(db){
 }
 function _idbPut(k,v){try{_idb.transaction(DB_STORE,"readwrite").objectStore(DB_STORE).put(v,k);}catch(e){console.warn("[idb put]",e);}}
 function _idbDel(k){try{_idb.transaction(DB_STORE,"readwrite").objectStore(DB_STORE).delete(k);}catch(e){console.warn("[idb del]",e);}}
+// 쓰기가 '실제로 디스크에 커밋'됐는지 확인(용량초과는 비동기 abort로 옴). 성공 true / 실패 false.
+function _idbPutAwait(k,v){
+  return new Promise((res)=>{
+    try{
+      const tx=_idb.transaction(DB_STORE,"readwrite");
+      tx.objectStore(DB_STORE).put(v,k);
+      tx.oncomplete=()=>res(true);
+      tx.onerror=()=>res(false);
+      tx.onabort=()=>res(false);   // QuotaExceededError 등
+    }catch(e){console.warn("[idb putAwait]",e);res(false);}
+  });
+}
 
 async function initStorage(){
   try{
     _idb=await _idbOpen();
     _cache=await _idbAll(_idb);
+    // 용량 압박 시 브라우저가 저장 데이터를 함부로 비우지 않도록 영속 저장 요청(베스트 에포트)
+    try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(_){}
     // 첫 실행 마이그레이션: IndexedDB가 비어있고 localStorage에 기존 데이터가 있으면 복사
     // (localStorage 원본은 지우지 않고 백업으로 보존)
     if(Object.keys(_cache).length===0){
@@ -339,6 +353,17 @@ const LS = {
       cloudMaybeDelete(k);
     }
   },
+  // 저장이 실제로 영속됐는지 '기다려서' 확인. 용량초과·거부 시 false + 캐시 롤백(거짓 성공 방지). 큰 저장(책 등)에 사용.
+  async setVerified(k,v){
+    const had=Object.prototype.hasOwnProperty.call(_cache,k),prev=_cache[k];
+    _cache[k]=v;
+    let ok;
+    if(_idb)ok=await _idbPutAwait(k,v);
+    else{try{localStorage.setItem(k,JSON.stringify(v));ok=true;}catch(e){console.error("[LS] 저장 실패:",k,e);ok=false;}}
+    if(!ok){if(had)_cache[k]=prev;else delete _cache[k];return false;}
+    if(k.startsWith("ng:")&&k!==META_KEY){_meta[k]=Date.now();_writeLocal(META_KEY,_meta);cloudMaybePush(k);}
+    return true;
+  },
 };
 function getStorageSize(){
   let t=0;
@@ -347,6 +372,20 @@ function getStorageSize(){
   return t;
 }
 const STORAGE_CAP=()=>_idb?200*1024*1024:4.5*1024*1024;
+// 브라우저가 보고하는 실제 사용량/할당량(가능하면). 폴백: 캐시 추정치. {usage,quota,free}
+async function estimateStorage(){
+  try{
+    if(navigator.storage&&navigator.storage.estimate){
+      const e=await navigator.storage.estimate();
+      if(e&&typeof e.quota==="number"&&typeof e.usage==="number")
+        return {usage:e.usage,quota:e.quota,free:Math.max(0,e.quota-e.usage)};
+    }
+  }catch(_){}
+  const used=getStorageSize(),cap=STORAGE_CAP();
+  return {usage:used,quota:cap,free:Math.max(0,cap-used)};
+}
+// 객체를 저장했을 때 대략 차지할 바이트(UTF-16 기준 보수적)
+const byteSize=(k,v)=>{try{return(k.length+JSON.stringify(v).length)*2;}catch{return 0;}};
 function formatSize(b){
   if(b<1024)return b+"B";
   if(b<1048576)return(b/1024).toFixed(1)+"KB";
@@ -2554,13 +2593,23 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
       isExam:isExam&&examQuestions.length>0,examQuestions,studyType:resolvedType,
       concepts:concepts.map(nm=>({id:uid(),name:String(nm).slice(0,80),box:1,dueAt:0,reps:0,lapses:0}))};
 
-    const usedBytes=getStorageSize();
-    if(usedBytes>STORAGE_CAP()){
-      fail(tr("저장 공간이 부족해 (","Out of storage (")+formatSize(usedBytes)+tr("). 오래된 자료를 먼저 삭제해줘.","). Delete old materials first."));return;
+    // ── 저장 전 실제 용량 검증 (브라우저 할당량 기준) ──
+    setBusyMsg(tr("저장 공간 확인 중…","Checking storage…"));
+    const need=byteSize(dk(id),deck);
+    const est=await estimateStorage();
+    if(est.free < need*1.5){   // 새 자료 + 색인·메타 여유까지 1.5배 확보 안 되면 거부
+      fail(tr("저장 공간이 부족해 (남은 공간 ","Not enough storage (free ")+formatSize(est.free)+tr(", 필요 ~",", need ~")+formatSize(need)+tr("). 설정에서 오래된 자료를 삭제하고 다시 시도해줘.","). Delete old materials in Settings and retry."));return;
     }
-    if(!LS.set(dk(id),deck)){fail(tr("저장 실패: 저장 공간이 꽉 찼어.","Save failed: storage is full."));return;}
-    if(!LS.set(DECKS_KEY,[{id,name:deck.name,subjId:useSubjId,studyType:resolvedType},...(LS.get(DECKS_KEY)||[])])){
-      LS.del(dk(id));fail(tr("저장 실패: 저장 공간이 꽉 찼어.","Save failed: storage is full."));return;
+    // ── 검증된 쓰기 (실제 영속 확인, 실패 시 롤백) ──
+    setBusyMsg(tr("저장 중…","Saving…"));
+    if(!(await LS.setVerified(dk(id),deck))){
+      LS.del(dk(id));
+      fail(tr("저장 실패: 용량 부족이거나 브라우저 저장이 거부됐어. 오래된 자료를 삭제하고 다시 시도해줘.","Save failed: out of space or storage was blocked. Delete old materials and retry."));return;
+    }
+    const prevList=LS.get(DECKS_KEY)||[];
+    if(!(await LS.setVerified(DECKS_KEY,[{id,name:deck.name,subjId:useSubjId,studyType:resolvedType},...prevList]))){
+      LS.del(dk(id));   // 본체 롤백 — 목록에 안 잡히는 유령 덱 방지
+      fail(tr("저장 실패: 저장 공간이 꽉 찼어. 오래된 자료를 삭제해줘.","Save failed: storage is full. Delete old materials."));return;
     }
     done();
   }

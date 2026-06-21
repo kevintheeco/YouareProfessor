@@ -830,7 +830,7 @@ function Prof({size=56}){
    단원평가(시험) 모드 — 이해+암기 합친 실전 시험
    출제(AI) → 응시(손글씨 보존) → 일괄 깊은 채점 → 검토. box(복습)와 독립.
 ════════════════════════════════════════════ */
-function Exam({deck,topic,onExit}){
+function Exam({deck,topic,onExit,student,academy}){
   const examLang=((deck&&deck.lang)||CFG.lang)==="en"?"en":"ko";
   const T=(ko,en)=>examLang==="en"?en:ko;
   const studyMat=deck?(deck.summary||deck.material.slice(0,8000)):"";
@@ -839,6 +839,7 @@ function Exam({deck,topic,onExit}){
   const scopeId=deck?deck.id:("topic_"+((topic&&topic.id)||"x"));
 
   const [phase,setPhase]=useState("gen");     // gen | take | grading | result | error
+  const [showReport,setShowReport]=useState(false);   // 학부모 상담 리포트 보기
   const [items,setItems]=useState([]);
   const [idx,setIdx]=useState(0);
   const [answers,setAnswers]=useState([]);    // [{choice,text}] (손글씨는 inkRef)
@@ -866,17 +867,25 @@ function Exam({deck,topic,onExit}){
       const schema=
         "반드시 JSON만 출력(코드블록 없이):\n"+
         '{"questions":[\n'+
-        ' {"type":"mc","concept":"개념명","points":5,"question":"문제","choices":["A","B","C","D"],"answer":0,"solution":"정답 풀이/이유"},\n'+
-        ' {"type":"short","concept":"개념명","points":5,"question":"문제","answer":"대표 정답","accept":["허용 동의어"],"solution":"부연"},\n'+
-        ' {"type":"essay","concept":"개념명","points":15,"question":"문제","rubric":["채점기준1","채점기준2","채점기준3"],"model_answer":"모범답안(수식 LaTeX)"}\n'+
-        "]} (answer는 정답 보기의 0-based 인덱스)";
+        ' {"type":"mc","unit":"단원명","concept":"개념명","points":5,"question":"문제","choices":["A","B","C","D"],"answer":0,"solution":"정답 풀이/이유"},\n'+
+        ' {"type":"short","unit":"단원명","concept":"개념명","points":5,"question":"문제","answer":"대표 정답","accept":["허용 동의어"],"solution":"부연"},\n'+
+        ' {"type":"essay","unit":"단원명","concept":"개념명","points":15,"question":"문제","rubric":["채점기준1","채점기준2","채점기준3"],"model_answer":"모범답안(수식 LaTeX)"}\n'+
+        ']} (answer는 정답 보기의 0-based 인덱스. "unit"은 그 문항이 속한 단원명 — 아래 지정된 단원명을 그대로 사용)';
+      const DIFF_KO={easy:"쉬움(기초 개념·계산)",medium:"보통(표준 유형)",hard:"어려움(응용·심화)"};
       const commonRule=
         "객관식(mc)·단답형(short)·서술/논술형(essay)을 적절히 섞고, 문항 수를 범위 깊이에 맞게 스스로 정해(보통 6~10문항). 난이도는 쉬움→어려움 고루.\n"+
         "출제 규칙: ① 정답이 문제 문장에 드러나면 안 됨 ② 객관식 오답 3개는 모두 그럴듯(흔한 오개념) ③ 서술형은 단계적 풀이·근거를 요구하는 좋은 문제 ④ 수식은 LaTeX($...$) ⑤ 범위 전반을 고르게.\n"+
         "배점: 객관식·단답은 작게, 서술은 크게. 총합 100점 근처.\n";
       let sys,userMsg;
-      if(topic){
-        // 교과과정(목차) 기반 — 자료 없이 한국 수학 교육과정 표준 내용으로 출제
+      if(topic&&Array.isArray(topic.units)&&topic.units.length){
+        // 학원 레벨테스트 — 여러 단원 동시 출제(단원별 문항 수·난이도 지정), 문항마다 unit 태깅
+        const lines=topic.units.map(u=>"· "+u.name+" — "+(u.count||2)+"문항, 난이도 "+(DIFF_KO[u.difficulty]||u.difficulty||"보통")).join("\n");
+        const totalQ=topic.units.reduce((s,u)=>s+(Number(u.count)||0),0);
+        sys="너는 대한민국 중·고등 수학 학원의 베테랑 출제위원이야. 학원 '레벨테스트(진단평가)'용 시험지를 한국 수학 교육과정 표준에 근거해 만들어. 아래 [단원별 출제 지시]를 정확히 지켜 — 각 단원에서 지정된 문항 수만큼, 지정된 난이도로 출제하고, 문항마다 그 문항이 속한 단원명을 'unit' 필드에 아래 표기 그대로 넣어. 학생 수준을 진단할 수 있게 단원별 핵심 유형(개념·계산·증명·그래프·활용)을 담아.\n"+
+          "출제 규칙: ① 정답이 문제 문장에 드러나면 안 됨 ② 객관식 오답 3개는 모두 그럴듯(흔한 오개념) ③ 서술형은 단계적 풀이·근거를 요구 ④ 수식은 LaTeX($...$) ⑤ mc/short/essay를 적절히 섞어. 배점: 객관식·단답 작게, 서술 크게, 총합 100점 근처.\n"+schema;
+        userMsg="[학년·과목] "+(topic.grade||topic.subject||"")+"\n[단원별 출제 지시] (총 "+totalQ+"문항)\n"+lines+"\n반드시 지정 단원만, 지정 문항 수대로 출제.";
+      }else if(topic){
+        // 교과과정(목차) 기반 — 자료 없이 한국 수학 교육과정 표준 내용으로 출제 (단일 단원)
         sys="너는 대한민국 중·고등 수학 학원의 베테랑 출제위원이야. 아래 [학년·과목]의 [단원] 범위에서, 한국 수학 교육과정 표준 내용에 근거한 실전 시험지를 만들어. 그 단원에서 실제로 시험에 자주 나오는 핵심 유형(개념·계산·증명·그래프·활용)을 빠짐없이 담아. "+commonRule+schema;
         userMsg="[학년·과목] "+(topic.subject||"")+"\n[단원] "+(topic.unit||"")+(topic.sub?(" > "+topic.sub):"")+"\n이 단원 범위만 출제(다른 단원 내용은 섞지 마).";
       }else{
@@ -887,7 +896,7 @@ function Exam({deck,topic,onExit}){
       const r=await callAI(sys,userMsg,true,{maxTok:8000,model:qmodel,lang:examLang},ctrl.signal);
       const arr=Array.isArray(r)?r:(r&&Array.isArray(r.questions)?r.questions:[]);
       const norm=arr.filter(q=>q&&q.question&&["mc","short","essay"].includes(q.type)).map(q=>({
-        id:uid(),type:q.type,concept:q.concept||"",points:Math.max(1,Math.round(Number(q.points)||(q.type==="essay"?15:5))),
+        id:uid(),type:q.type,concept:q.concept||"",unit:q.unit||q.concept||"",points:Math.max(1,Math.round(Number(q.points)||(q.type==="essay"?15:5))),
         question:String(q.question),
         choices:q.type==="mc"&&Array.isArray(q.choices)?q.choices.slice(0,4):undefined,
         answer:q.type==="mc"?Number(q.answer)||0:undefined,
@@ -931,7 +940,7 @@ function Exam({deck,topic,onExit}){
       for(const t of list){
         if(ctrl.signal.aborted)return;
         try{out[t.i]=await gradeOne(t,ctrl.signal);}
-        catch(e){if(e.name==="AbortError")return;out[t.i]={error:true,points:t.q.points,score:0,model:t.q.model_answer||t.q.solution||"",type:t.q.type,mcAnswer:t.q.answer,choice:t.ans.choice,text:t.ans.text,inkImg:inkHas(t.ink)?renderInkPNG(t.ink):null,gap:T("채점 오류 — 다시 시도해줘","Grading error")};}
+        catch(e){if(e.name==="AbortError")return;out[t.i]={error:true,points:t.q.points,score:0,model:t.q.model_answer||t.q.solution||"",type:t.q.type,mcAnswer:t.q.answer,choice:t.ans.choice,text:t.ans.text,concept:t.q.concept,unit:t.q.unit||t.q.concept||"",inkImg:inkHas(t.ink)?renderInkPNG(t.ink):null,gap:T("채점 오류 — 다시 시도해줘","Grading error")};}
         done++;setGradeProg(done);
       }
     }
@@ -974,14 +983,28 @@ function Exam({deck,topic,onExit}){
     if(!isFinite(sc))sc=(q.type==="mc"?(ans.choice===q.answer?pts:0):0);
     sc=Math.max(0,Math.min(pts,Math.round(sc*10)/10));
     return {score:sc,points:pts,verdict:r&&r.verdict,essence:r&&r.essence,gotIt:r&&r.gotIt,gap:r&&r.gap,known:r&&r.known,unknown:r&&r.unknown,next:r&&r.next,
-      model:(r&&r.model)||q.model_answer||q.solution||"",type:q.type,mcAnswer:q.answer,choices:q.choices,choice:ans.choice,text:ans.text,question:q.question,concept:q.concept,inkImg};
+      model:(r&&r.model)||q.model_answer||q.solution||"",type:q.type,mcAnswer:q.answer,choices:q.choices,choice:ans.choice,text:ans.text,question:q.question,concept:q.concept,unit:q.unit||q.concept||"",inkImg};
   }
 
+  // 단원별 집계: 단원→{정답률·약점·보강}. 결과 요약·학부모 리포트·저장에 공용 사용
+  function aggUnits(gr){
+    const m={};
+    gr.forEach(g=>{const u=(g&&(g.unit||g.concept))||T("기타","Other");(m[u]=m[u]||[]).push(g);});
+    return Object.keys(m).map(unit=>{
+      const gs=m[unit];
+      const pts=gs.reduce((s,g)=>s+(g.points||0),0),sc=gs.reduce((s,g)=>s+(g.score||0),0);
+      const rate=pts?Math.round(sc/pts*100):0;
+      const wrong=gs.filter(g=>g.verdict!=="correct");
+      return{unit,n:gs.length,sc,pts,rate,weak:rate<60,
+        gaps:wrong.map(g=>g.gap).filter(x=>x&&x!=="없음"),
+        nexts:wrong.map(g=>g.next).filter(Boolean)};
+    }).sort((a,b)=>a.rate-b.rate);
+  }
   function saveRecord(gr,total){
     try{
       const id=uid();
-      const rec={id,scope:scopeId,title:examTitle,takenAt:Date.now(),score:total,maxScore,
-        grades:gr.map(g=>({...g}))};
+      const rec={id,scope:scopeId,title:examTitle,studentName:student||"",takenAt:Date.now(),score:total,maxScore,
+        byUnit:aggUnits(gr),grades:gr.map(g=>({...g}))};
       LS.set("ng:exam:"+scopeId+":"+id,rec);
       const idxKey="ng:examidx:"+scopeId;
       const list=LS.get(idxKey)||[];
@@ -1076,13 +1099,30 @@ function Exam({deck,topic,onExit}){
           </div>
         );})()}
 
-        {phase==="result"&&(
+        {phase==="result"&&!showReport&&(
           <div className="card qcard" style={{maxWidth:760,margin:"0 auto"}}>
             {/* 총점 헤더 */}
             <div style={{textAlign:"center",padding:"6px 0 16px",borderBottom:"1px solid var(--line)",marginBottom:16}}>
               <div style={{fontFamily:"'Jua',sans-serif",fontSize:40,color:pct>=80?"var(--mint)":pct>=60?"var(--gold)":"var(--rose)"}}>{score}<span style={{fontSize:20,color:"var(--sub)"}}> / {maxScore}</span></div>
               <div style={{fontSize:14,fontWeight:700,color:"var(--ink)",marginTop:2}}>{pct}% · {pct>=80?T("훌륭해! 🎉","Excellent! 🎉"):pct>=60?T("좋아, 약점만 보강하자 💪","Good — shore up the gaps 💪"):T("여기서부터 키우자 🔁","Let's build from here 🔁")}</div>
             </div>
+            {/* 단원별 정답률 요약 */}
+            {(()=>{const us=aggUnits(grades);return us.length>1?(
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:12,fontWeight:700,color:"var(--sub)",marginBottom:8}}>{T("단원별 정답률","Accuracy by unit")}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:9}}>
+                  {us.map((u,i)=>(
+                    <div key={i}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:3,gap:8}}>
+                        <span style={{fontSize:13,fontWeight:600,color:u.weak?"#9B1C1C":"var(--ink)"}}>{u.weak?"⚠️ ":""}<MathText text={u.unit} tag="span"/></span>
+                        <span style={{fontSize:13,fontWeight:800,color:u.rate>=80?"var(--mint)":u.rate>=60?"var(--gold)":"var(--rose)"}}>{u.rate}%</span>
+                      </div>
+                      <div className="bar"><i style={{width:u.rate+"%",background:u.rate>=80?"var(--mint)":u.rate>=60?"var(--gold)":"var(--rose)"}}/></div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ):null;})()}
             {/* 문항 네비 */}
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
               <button className="btn gho sm" onClick={()=>setIdx(i=>Math.max(0,i-1))} disabled={idx<=0}>◀</button>
@@ -1121,9 +1161,114 @@ function Exam({deck,topic,onExit}){
                 {g.model&&<Fb label={T("모범답안","Model answer")} color="#0F766E" bg="#F0FDFA" text={g.model}/>}
               </div>
             </>);})()}
-            <button className="btn gho" style={{marginTop:18}} onClick={onExit}>{T("← 홈으로","← Home")}</button>
+            <div style={{display:"flex",gap:8,marginTop:18,flexWrap:"wrap"}}>
+              <button className="btn pri" onClick={()=>{setShowReport(true);}}>🧾 {academy?T("학부모 상담 리포트","Parent report"):T("진단 리포트","Diagnostic report")}</button>
+              <button className="btn gho" onClick={onExit}>{T("← 홈으로","← Home")}</button>
+            </div>
           </div>
         )}
+        {phase==="result"&&showReport&&(()=>{
+          const us=aggUnits(grades);
+          const weakUnits=us.filter(u=>u.weak);
+          const strongUnits=us.filter(u=>u.rate>=80);
+          const verdictKo=(v)=>v==="correct"?T("정답","Correct"):v==="incorrect"?T("오답","Wrong"):T("부분","Partial");
+          const wlist=weakUnits.map(u=>u.unit).join(", ");
+          const summary=pct>=80
+            ?T(`전반적으로 안정적입니다.${weakUnits.length?` 다만 ${wlist} 단원만 더 다듬으면 완성도가 올라갑니다.`:" 선택한 단원 전반을 잘 소화하고 있습니다."}`,"Solid overall.")
+            :pct>=60
+            ?T(`기본기는 갖췄으나 ${weakUnits.length?wlist+" 단원에서":"일부 단원에서"} 반복적으로 막힙니다. 이 단원을 집중 보완하면 점수가 빠르게 오를 단계입니다.`,"Knows the basics; focus the weak units below.")
+            :T(`여러 단원에서 기초가 흔들립니다. 새 진도보다 ${weakUnits.slice(0,2).map(u=>u.unit).join(", ")||"약한 단원"}부터 핵심 개념을 다시 잡아주길 권합니다.`,"Foundations need rebuilding first.");
+          return(
+          <div id="parent-report" className="card qcard" style={{maxWidth:760,margin:"0 auto",padding:"24px 26px"}}>
+            <style>{`@media print{body *{visibility:hidden!important}#parent-report,#parent-report *{visibility:visible!important}#parent-report{position:absolute;left:0;top:0;width:100%;max-width:none;border:none;box-shadow:none;margin:0}.report-noprint{display:none!important}}`}</style>
+            {/* 리포트 헤더 */}
+            <div style={{display:"flex",alignItems:"center",gap:10,borderBottom:"2px solid var(--pri)",paddingBottom:12,marginBottom:16}}>
+              <Prof size={40}/>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:"'Jua',sans-serif",fontSize:18,color:"var(--ink)"}}>{T("레벨테스트 진단 리포트","Level Test Report")}</div>
+                <div style={{fontSize:12,color:"var(--sub)"}}>{T("니가교수 · 학부모 상담용","YouAreProfessor · for parent consultation")}</div>
+              </div>
+              <div style={{textAlign:"right",fontSize:12,color:"var(--sub)"}}>{new Date().toLocaleDateString(examLang==="en"?"en-US":"ko-KR",{year:"numeric",month:"long",day:"numeric"})}</div>
+            </div>
+            {/* 학생·범위·총점 */}
+            <div style={{display:"flex",flexWrap:"wrap",gap:"10px 24px",marginBottom:16,fontSize:14}}>
+              <div><span style={{color:"var(--sub)"}}>{T("학생","Student")}</span> <b>{student||T("학생","Student")}</b></div>
+              <div><span style={{color:"var(--sub)"}}>{T("범위","Scope")}</span> <b>{examTitle}</b></div>
+              <div style={{marginLeft:"auto",fontFamily:"'Jua',sans-serif",fontSize:22,color:pct>=80?"var(--mint)":pct>=60?"var(--gold)":"var(--rose)"}}>{score}/{maxScore} <span style={{fontSize:14,color:"var(--sub)"}}>({pct}%)</span></div>
+            </div>
+            {/* 종합 소견 */}
+            <div style={{background:"var(--pri-s)",borderRadius:12,padding:"13px 16px",marginBottom:18,lineHeight:1.7,fontSize:14}}>
+              <div style={{fontWeight:800,color:"var(--pri-d)",marginBottom:4}}>📋 {T("종합 소견","Summary")}</div>
+              {summary}
+            </div>
+            {/* 단원별 진단 표 */}
+            <div style={{fontFamily:"'Jua',sans-serif",fontSize:15,color:"var(--ink)",marginBottom:8}}>📊 {T("단원별 진단","By unit")}</div>
+            <div style={{overflowX:"auto",marginBottom:18}}>
+              <table style={{borderCollapse:"collapse",width:"100%",fontSize:13}}>
+                <thead><tr style={{background:"var(--pri-s)",color:"var(--pri-d)"}}>
+                  {[T("단원","Unit"),T("문항","Q"),T("정답률","Accuracy"),T("상태","Status")].map((h,i)=>
+                    <th key={i} style={{padding:"7px 10px",border:"1px solid var(--line)",textAlign:i?"center":"left"}}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {us.map((u,i)=>(
+                    <tr key={i} style={i%2?{background:"var(--bg)"}:undefined}>
+                      <td style={{padding:"7px 10px",border:"1px solid var(--line)"}}><MathText text={u.unit} tag="span"/></td>
+                      <td style={{padding:"7px 10px",border:"1px solid var(--line)",textAlign:"center"}}>{u.n}</td>
+                      <td style={{padding:"7px 10px",border:"1px solid var(--line)",textAlign:"center",fontWeight:800,color:u.rate>=80?"var(--mint)":u.rate>=60?"var(--gold)":"var(--rose)"}}>{u.rate}%</td>
+                      <td style={{padding:"7px 10px",border:"1px solid var(--line)",textAlign:"center",fontWeight:700,color:u.weak?"#9B1C1C":"#065F46"}}>{u.weak?T("보완 필요","Needs work"):u.rate>=80?T("우수","Strong"):T("양호","OK")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* 집중 보완 단원 */}
+            <div style={{fontFamily:"'Jua',sans-serif",fontSize:15,color:"#9B1C1C",marginBottom:8}}>🎯 {T("집중 보완이 필요한 단원","Focus units")} ({weakUnits.length})</div>
+            {weakUnits.length?(
+              <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:18}}>
+                {weakUnits.map((u,i)=>(
+                  <div key={i} style={{border:"1.5px solid #FECACA",background:"#FEF2F2",borderRadius:10,padding:"11px 14px"}}>
+                    <div style={{fontWeight:700,color:"#9B1C1C",marginBottom:4}}><MathText text={u.unit} tag="span"/> <span style={{fontSize:11,color:"var(--sub)",fontWeight:400}}>· {T("정답률","accuracy")} {u.rate}%</span></div>
+                    {u.gaps.length>0&&<div style={{fontSize:13,lineHeight:1.6,marginBottom:3}}><b style={{color:"#9B1C1C"}}>{T("막힌 곳","Gaps")}:</b> <MathText text={u.gaps.slice(0,2).join(" / ")} tag="span"/></div>}
+                    {u.nexts.length>0&&<div style={{fontSize:13,lineHeight:1.6}}><b style={{color:"#5B21B6"}}>{T("보강 방향","Next")}:</b> <MathText text={u.nexts[0]} tag="span"/></div>}
+                  </div>
+                ))}
+              </div>
+            ):<div style={{color:"var(--sub)",marginBottom:18,fontSize:13}}>{T("이번 평가에서 보완이 시급한 단원은 없습니다. 👏","No urgent weak units this time. 👏")}</div>}
+            {/* 강점 단원 */}
+            {strongUnits.length>0&&<>
+              <div style={{fontFamily:"'Jua',sans-serif",fontSize:15,color:"#065F46",marginBottom:8}}>💪 {T("잘하고 있는 단원","Strong units")} ({strongUnits.length})</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:18}}>
+                {strongUnits.map((u,i)=><span key={i} className="chip" style={{background:"#ECFDF3",color:"#065F46",border:"1px solid #A7F3D0"}}><MathText text={u.unit} tag="span"/> {u.rate}%</span>)}
+              </div>
+            </>}
+            {/* 문항별 결과 표 */}
+            <div style={{fontFamily:"'Jua',sans-serif",fontSize:15,color:"var(--ink)",marginBottom:8}}>📊 {T("문항별 결과","By question")}</div>
+            <div style={{overflowX:"auto",marginBottom:18}}>
+              <table style={{borderCollapse:"collapse",width:"100%",fontSize:12.5}}>
+                <thead><tr style={{background:"var(--pri-s)",color:"var(--pri-d)"}}>
+                  {[T("#","#"),T("유형","Type"),T("개념","Concept"),T("점수","Score"),T("결과","Result")].map((h,i)=>
+                    <th key={i} style={{padding:"7px 9px",border:"1px solid var(--line)",textAlign:i>2?"center":"left"}}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {grades.map((g,i)=>(
+                    <tr key={i} style={i%2?{background:"var(--bg)"}:undefined}>
+                      <td style={{padding:"6px 9px",border:"1px solid var(--line)",textAlign:"center"}}>{i+1}</td>
+                      <td style={{padding:"6px 9px",border:"1px solid var(--line)"}}>{TYPE_LABEL(g.type)}</td>
+                      <td style={{padding:"6px 9px",border:"1px solid var(--line)"}}><MathText text={g.concept||"-"} tag="span"/></td>
+                      <td style={{padding:"6px 9px",border:"1px solid var(--line)",textAlign:"center"}}>{g.score}/{g.points}</td>
+                      <td style={{padding:"6px 9px",border:"1px solid var(--line)",textAlign:"center",color:vColor(g.verdict),fontWeight:700}}>{verdictKo(g.verdict)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="report-noprint" style={{display:"flex",gap:8,flexWrap:"wrap",borderTop:"1px solid var(--line)",paddingTop:14}}>
+              <button className="btn pri" onClick={()=>window.print()}>🖨️ {T("인쇄 / PDF 저장","Print / Save PDF")}</button>
+              <button className="btn gho" onClick={()=>setShowReport(false)}>{T("← 채점 결과로","← Back to results")}</button>
+              <button className="btn gho" onClick={onExit}>{T("홈으로","Home")}</button>
+            </div>
+          </div>);
+        })()}
       </div>
     </section>
   );
@@ -4174,47 +4319,139 @@ const CURRICULUM=[
 ];
 
 function AcademyApp(){
-  const [view,setView]=useState("home");   // home | exam
+  const [view,setView]=useState("build");   // build | preview | exam
   const [topic,setTopic]=useState(null);
+  const [student,setStudent]=useState(LS.get("ng:academy:student")||"");
+  const [picked,setPicked]=useState({});     // "subjId::단원" → {name,subj,count,difficulty}
+  const [openSubj,setOpenSubj]=useState(null);
   const [keyReady,setKeyReady]=useState(!!(CFG.key||CFG.geminiKey));
+  const DIFFS=[["easy",tr("쉬움","Easy")],["medium",tr("보통","Medium")],["hard",tr("어려움","Hard")]];
   const toPersonal=()=>{location.hash="";location.reload();};
-  const pickUnit=(sub,unit,ui)=>{setTopic({id:sub.id+"_"+ui,subject:sub.name,unit,label:sub.name+" · "+unit});setView("exam");};
+  const saveStudent=(v)=>{setStudent(v);LS.set("ng:academy:student",v);};
+  const keyOf=(sid,u)=>sid+"::"+u;
+  const toggleUnit=(sid,sname,u)=>setPicked(p=>{const k=keyOf(sid,u),n={...p};if(n[k])delete n[k];else n[k]={name:u,subj:sname,count:2,difficulty:"medium"};return n;});
+  const setField=(k,f,v)=>setPicked(p=>({...p,[k]:{...p[k],[f]:v}}));
+  const pickedList=Object.entries(picked);
+  const totalQ=pickedList.reduce((s,[,v])=>s+(Number(v.count)||0),0);
+  function makeTest(){
+    const units=pickedList.map(([,v])=>({name:v.name,count:Number(v.count)||2,difficulty:v.difficulty}));
+    const subjs=[...new Set(pickedList.map(([,v])=>v.subj))];
+    setTopic({id:"level_"+Date.now(),label:subjs.join(", ")+" · "+tr("레벨테스트","Level test"),grade:subjs.join(", "),subject:subjs[0]||"",units});
+    setView("preview");
+  }
   const Head=()=>(
     <div className="hd">
-      <div className="brand"><Prof size={44}/><div><h1>{tr("니가교수 학원","Academy")}</h1><div className="tag">{tr("교과과정 목차로 시험 출제","Make tests from the curriculum")}</div></div></div>
+      <div className="brand"><Prof size={44}/><div><h1>{tr("니가교수 학원","Academy")}</h1><div className="tag">{tr("단원 선택 → 레벨테스트 → 학부모 리포트","Pick units → level test → parent report")}</div></div></div>
       <div className="hd-r"><button className="btn gho sm" onClick={toPersonal}>{tr("← 개인 학습","← Personal")}</button></div>
     </div>
   );
   if(!keyReady)return(<><Head/><div className="card panel"><div className="eyebrow" style={{marginBottom:8}}>{tr("API 키 입력","API key")}</div><KeyForm onSaved={()=>setKeyReady(true)} cta={tr("저장하고 시작","Save & start")}/></div></>);
-  if(view==="exam"&&topic)return(<Exam topic={topic} onExit={()=>setView("home")}/>);
-  return(<>
+  if(view==="exam"&&topic)return(<Exam topic={topic} student={student} academy onExit={()=>setView("build")}/>);
+
+  // ── 미리보기 ──
+  if(view==="preview"&&topic)return(<>
     <Head/>
     <section>
+      <div className="card" style={{padding:"22px 24px",maxWidth:680,margin:"0 auto"}}>
+        <div className="eyebrow" style={{marginBottom:6}}>{tr("레벨테스트 미리보기","Test preview")}</div>
+        <div style={{fontFamily:"'Jua',sans-serif",fontSize:20,color:"var(--ink)",marginBottom:4}}>{topic.label}</div>
+        <div style={{fontSize:13.5,color:"var(--sub)",marginBottom:16}}>{tr("학생","Student")}: <b style={{color:"var(--ink)"}}>{student||tr("(미입력)","(none)")}</b></div>
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+          {topic.units.map((u,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:10,border:"1px solid var(--line)",borderRadius:10,padding:"10px 14px"}}>
+              <span style={{flex:1,fontWeight:600,color:"var(--ink)"}}>{u.name}</span>
+              <span className="chip" style={{background:"var(--pri-s)",color:"var(--pri-d)"}}>{u.count}{tr("문항","Q")}</span>
+              <span className="chip gho">{(DIFFS.find(d=>d[0]===u.difficulty)||[])[1]}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:16,fontSize:14,fontWeight:700,color:"var(--ink)",marginBottom:6}}>
+          <span>📋 {tr("총","Total")} {totalQ}{tr("문항","Q")}</span>
+          <span>⏱️ {tr("예상","Est.")} {Math.max(5,totalQ*2)}{tr("분","min")}</span>
+        </div>
+        <p className="hint" style={{marginBottom:16}}>{tr("‘학생 응시 시작’을 누르면 AI가 위 구성으로 문제를 생성해 (조금 걸려요).","Tap start — AI generates the questions (takes a moment).")}</p>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button className="btn pri" onClick={()=>setView("exam")}>▶ {tr("학생 응시 시작","Start test")}</button>
+          <button className="btn gho" onClick={()=>setView("build")}>{tr("← 단원 다시 고르기","← Edit units")}</button>
+        </div>
+      </div>
+    </section>
+  </>);
+
+  // ── 빌더 ──
+  return(<>
+    <Head/>
+    <section style={{paddingBottom:96}}>
       <div className="hero">
         <Prof size={56}/>
         <div>
-          <h2>{tr(<>단원을 고르면<br/>시험이 만들어져</>,<>Pick a unit,<br/>get a test</>)}</h2>
-          <p>{tr("중1~고3 수학 교과과정이야. 단원을 누르면 그 범위 실전 시험(객관식+단답+서술)을 AI가 출제하고, 다 풀면 한 번에 채점·점수까지.","Korean math, grades 7–12. Tap a unit → AI builds a real test, graded at once.")}</p>
+          <h2>{tr(<>단원을 선택하면,<br/>레벨테스트가 바로 만들어집니다</>,<>Pick units,<br/>get a level test</>)}</h2>
+          <p>{tr("학생 이름을 적고, 과목을 펼쳐 진단할 단원을 골라줘. 단원별 문항 수·난이도를 정한 뒤 테스트를 만들면 손글씨 풀이까지 AI가 채점해 단원별 약점과 학부모 리포트를 보여줘.","Name the student, expand a subject, pick units, set counts/difficulty.")}</p>
         </div>
       </div>
+      {/* 학생 이름 */}
+      <div className="card" style={{padding:"14px 16px",marginBottom:16}}>
+        <label style={{fontSize:12.5,fontWeight:700,color:"var(--sub)",display:"block",marginBottom:6}}>🧑‍🎓 {tr("학생 이름","Student name")}</label>
+        <input className="field" value={student} onChange={e=>saveStudent(e.target.value)} placeholder={tr("예: 김도윤","e.g. Jane")} style={{maxWidth:280}}/>
+      </div>
+      {/* 과목·단원 선택 */}
       {CURRICULUM.map((lv,li)=>(
-        <div key={li} style={{marginBottom:18}}>
+        <div key={li} style={{marginBottom:16}}>
           <div className="eyebrow" style={{marginBottom:8}}>{lv.level}</div>
-          <div style={{display:"flex",flexDirection:"column",gap:12}}>
-            {lv.subjects.map(sub=>(
-              <article key={sub.id} className="card" style={{padding:"15px 17px"}}>
-                <div style={{fontFamily:"'Jua',sans-serif",fontSize:16,color:"var(--ink)",marginBottom:10}}>{sub.name}</div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                  {sub.units.map((u,ui)=>(
-                    <button key={ui} className="btn gho sm" onClick={()=>pickUnit(sub,u,ui)} title={tr("이 단원 시험 출제","Make a test for this unit")}>📝 {u}</button>
-                  ))}
-                </div>
-              </article>
-            ))}
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {lv.subjects.map(sub=>{
+              const open=openSubj===sub.id;
+              const nSel=sub.units.filter(u=>picked[keyOf(sub.id,u)]).length;
+              return(
+              <article key={sub.id} className="card" style={{padding:"4px 6px"}}>
+                <button onClick={()=>setOpenSubj(open?null:sub.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:10,background:"none",border:"none",cursor:"pointer",padding:"12px 12px",fontFamily:"inherit"}}>
+                  <span style={{fontFamily:"'Jua',sans-serif",fontSize:16,color:"var(--ink)",flex:1,textAlign:"left"}}>{sub.name}</span>
+                  {nSel>0&&<span className="chip" style={{background:"var(--pri)",color:"#fff"}}>{nSel}{tr(" 단원"," units")}</span>}
+                  <span style={{color:"var(--sub)",fontSize:13}}>{open?"▲":"▼"}</span>
+                </button>
+                {open&&(
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8,padding:"0 12px 14px"}}>
+                    {sub.units.map((u,ui)=>{const on=!!picked[keyOf(sub.id,u)];return(
+                      <button key={ui} className="btn sm" onClick={()=>toggleUnit(sub.id,sub.name,u)}
+                        style={{border:"1.5px solid "+(on?"var(--pri)":"var(--line)"),background:on?"var(--pri-s)":"#fff",color:on?"var(--pri-d)":"var(--ink)",fontWeight:on?700:500}}>
+                        {on?"✓ ":""}{u}
+                      </button>);})}
+                  </div>
+                )}
+              </article>);
+            })}
           </div>
         </div>
       ))}
-      <p className="hint" style={{marginTop:4}}>{tr("※ 목차는 초안이야 — 학원 납품 전 검수·수정해야 정확해. 더 채울 과목·단원 있으면 말해줘.","Draft curriculum — verify before delivery.")}</p>
+      {/* 선택한 단원 설정 */}
+      {pickedList.length>0&&(
+        <div className="card" style={{padding:"16px 18px",marginBottom:16}}>
+          <div style={{fontFamily:"'Jua',sans-serif",fontSize:15,color:"var(--ink)",marginBottom:10}}>🎯 {tr("선택한 단원","Selected units")} ({pickedList.length})</div>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {pickedList.map(([k,v])=>(
+              <div key={k} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",borderBottom:"1px solid var(--line)",paddingBottom:10}}>
+                <span style={{flex:"1 1 140px",fontWeight:600,color:"var(--ink)"}}>{v.name} <span style={{fontSize:11,color:"var(--sub)",fontWeight:400}}>· {v.subj}</span></span>
+                <div style={{display:"flex",alignItems:"center",gap:4}}>
+                  <button className="btn gho xs" onClick={()=>setField(k,"count",Math.max(1,(Number(v.count)||1)-1))}>−</button>
+                  <span style={{minWidth:46,textAlign:"center",fontSize:13,fontWeight:700}}>{v.count}{tr("문항","Q")}</span>
+                  <button className="btn gho xs" onClick={()=>setField(k,"count",Math.min(8,(Number(v.count)||1)+1))}>+</button>
+                </div>
+                <select className="field" value={v.difficulty} onChange={e=>setField(k,"difficulty",e.target.value)} style={{width:"auto",padding:"6px 8px",fontSize:12.5}}>
+                  {DIFFS.map(([id,lbl])=><option key={id} value={id}>{lbl}</option>)}
+                </select>
+                <button className="btn gho xs" onClick={()=>toggleUnit(k.split("::")[0],v.subj,v.name)} title={tr("빼기","Remove")}>✕</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <p className="hint" style={{marginBottom:8}}>{tr("※ 목차는 초안이야 — 학원 납품 전 검수·수정 필요.","Draft curriculum — verify before delivery.")}</p>
+      {/* 하단 고정 생성 버튼 */}
+      <div style={{position:"sticky",bottom:12,marginTop:8}}>
+        <button className="btn pri" disabled={!totalQ} onClick={makeTest} style={{width:"100%",padding:"15px",fontSize:15,opacity:totalQ?1:0.5,boxShadow:"0 6px 20px rgba(108,92,231,.3)"}}>
+          🧪 {tr("레벨테스트 만들기","Make level test")}{totalQ?" · "+tr("총","")+" "+totalQ+tr("문항","Q"):""}
+        </button>
+      </div>
     </section>
   </>);
 }

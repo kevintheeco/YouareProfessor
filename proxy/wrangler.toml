@@ -1,0 +1,14 @@
+name = "yp-ai-proxy"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+[vars]
+# CORS 허용 오리진(콤마로 여러 개). 라이브 GitHub Pages 오리진 + 로컬 테스트.
+ALLOWED_ORIGIN = "https://kevintheeco.github.io,http://localhost:8000,http://127.0.0.1:8000"
+# OpenAI 폴백 모델 (필요 시 변경)
+OPENAI_MODEL_SMART = "gpt-4o"
+OPENAI_MODEL_FAST = "gpt-4o-mini"
+
+# 키는 여기 두지 말 것! 아래 명령으로 시크릿 등록:
+#   wrangler secret put GEMINI_KEY
+#   wrangler secret put OPENAI_KEY

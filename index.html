@@ -566,7 +566,7 @@ const QMODELS=[
 
 // opts: { cache:bool, maxTok:number, model:string }
 async function callGemini(system,userContent,wantJson,opts={},signal){
-  if(!CFG.geminiKey)throw new Error("Gemini API 키가 없어 — 설정에서 추가해줘");
+  if(!CFG.geminiKey){const e=new Error("Gemini API 키가 없어 — 설정에서 추가해줘");e.noFallback=true;throw e;}
   const model=(opts.model||"gemini-2.5-flash");
   const maxTok=opts.maxTok||(wantJson?2048:1024);
   const parts=[];
@@ -598,7 +598,7 @@ async function callGemini(system,userContent,wantJson,opts={},signal){
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CFG.geminiKey}`,
     {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal}
   );
-  if(!res.ok){let m="Gemini "+res.status;try{const j=await res.json();m=j.error?.message||m}catch{}throw new Error(m)}
+  if(!res.ok){let m="Gemini "+res.status;try{const j=await res.json();m=j.error?.message||m}catch{}const er=new Error(m);er.status=res.status;throw er;}
   const data=await res.json();
   const text=(data.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim();
   if(!wantJson)return text;
@@ -607,14 +607,88 @@ async function callGemini(system,userContent,wantJson,opts={},signal){
   if(s===-1)throw new Error("JSON 응답 없음");
   return parseJsonLoose(clean.slice(s,e>s?e+1:clean.length));
 }
-function callAI(system,userContent,wantJson,opts={},signal){
+// 클로드 API 장애 시 폴백할 백업 프록시(Cloudflare Worker). 키는 프록시 서버에만 있음.
+// 최초 배포(proxy/) 후 워커 URL을 여기에 채운다. 비어있으면 공용 폴백 비활성(개인키 폴백만 동작).
+const PROXY_URL="";
+const _sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function _aiRetriable(e){
+  if(!e||e.noFallback||e.name==="AbortError")return false;
+  if(e.status===undefined)return true;        // 네트워크 끊김(TypeError 등) → 재시도/폴백 대상
+  return [408,429,500,502,503,504,529].includes(e.status);
+}
+function _geminiFallbackModel(model){
+  return (model||"").toLowerCase().includes("haiku")?"gemini-2.5-flash":"gemini-2.5-pro";
+}
+let _fbToastT;
+function _notifyFallback(which){
+  try{
+    let el=document.getElementById("aiFbToast");
+    if(!el){el=document.createElement("div");el.id="aiFbToast";
+      el.style.cssText="position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:99999;background:rgba(20,20,22,.94);color:#fff;padding:9px 16px;border-radius:20px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.35);opacity:0;transition:opacity .3s;pointer-events:none";
+      document.body.appendChild(el);}
+    el.textContent=which==="gemini"?"⚡ 클로드 지연 — 백업 AI로 이어서 처리 중":"⚡ 백업 AI로 이어서 처리 중";
+    el.style.opacity="1";clearTimeout(_fbToastT);_fbToastT=setTimeout(()=>{el.style.opacity="0";},3500);
+  }catch{}
+}
+// 백업 프록시 호출 — 서버가 Gemini→GPT 순으로 처리. 키 노출 없음.
+async function callProxy(system,userContent,wantJson,opts={},signal){
+  if(!PROXY_URL)throw new Error("백업 프록시 미설정");
+  const tier=(opts.model||CFG.model||"").toLowerCase().includes("haiku")?"fast":"smart";
+  const messages=opts.messages||[{role:"user",content:userContent}];
+  const res=await fetch(PROXY_URL,{
+    method:"POST",headers:{"content-type":"application/json"},signal,
+    body:JSON.stringify({system,messages,wantJson,maxTok:opts.maxTok,tier}),
+  });
+  if(!res.ok){let m="Proxy "+res.status;try{const j=await res.json();m=j.error||(j.detail&&j.detail.join("; "))||m;}catch{}const er=new Error(m);er.status=res.status;throw er;}
+  const data=await res.json();
+  const text=(data.text||"").trim();
+  if(opts.onDelta&&!wantJson&&text){try{opts.onDelta(text);}catch{}}
+  if(!wantJson)return text;
+  let clean=text.replace(/```json\s*/gi,"").replace(/```/g,"").trim();
+  const s=clean.indexOf("{"),e=clean.lastIndexOf("}");
+  if(s===-1)throw new Error("JSON 응답 없음 — 다시 시도해봐");
+  return parseJsonLoose(clean.slice(s,e>s?e+1:clean.length));
+}
+async function callAI(system,userContent,wantJson,opts={},signal){
   if(opts.lang==="en")system=
     "WRITE YOUR ENTIRE RESPONSE IN ENGLISH. Even though the instructions below and the study material may be in Korean, every sentence you output — questions, feedback, explanations, hints, model answers, table cells, graph labels — MUST be in natural English. Translate ideas from Korean source material into English; never reply in Korean prose. The ONLY exception: if a strict output format below lists fixed Korean tokens for the fields QTYPE / GAP_TYPE / DEPTH / VERDICT, keep those exact tokens (recall/understand/apply; 개념누락/이해얕음/핵심비껴감/표현부족/갭없음; 암기 수준/이해 수준/설명가능 수준/응용가능 수준; correct/partial/incorrect). Everything else = English.\n\n"
     +system
     +"\n\n[REMINDER: Respond in ENGLISH only. Do not drift back to Korean even if the source is Korean.]";
   const m=opts.model||CFG.model;
-  if(m.startsWith("gemini"))return callGemini(system,userContent,wantJson,opts,signal);
-  return callClaude(system,userContent,wantJson,opts,signal);
+  const primaryGemini=m.startsWith("gemini");
+  const runPrimary=()=>primaryGemini
+    ?callGemini(system,userContent,wantJson,opts,signal)
+    :callClaude(system,userContent,wantJson,opts,signal);
+  // 1) 1차 시도 + 같은 API 자동 재시도 (클로드 과부하 529 등은 보통 몇 초 뒤 풀림)
+  const delays=[0,800,2200];
+  let lastErr;
+  for(let i=0;i<delays.length;i++){
+    if(signal&&signal.aborted)throw new DOMException("aborted","AbortError");
+    if(delays[i])await _sleep(delays[i]);
+    try{return await runPrimary();}
+    catch(e){lastErr=e;if(!_aiRetriable(e))break;}
+  }
+  // 2) 그래도 실패 → 다른 경로로 자동 폴백 (순서대로 시도, 먼저 성공하는 걸 사용)
+  if(!_aiRetriable(lastErr))throw lastErr;
+  const fallbacks=[];
+  if(primaryGemini){
+    // Gemini 장애 → 클로드(개인키 있으면) → 공용 프록시
+    if(CFG.key)fallbacks.push(()=>callClaude(system,userContent,wantJson,{...opts,model:CFG.model},signal));
+  }else{
+    // 클로드 장애 → 개인 Gemini 키(있으면) → 공용 프록시(Gemini→GPT)
+    if(CFG.geminiKey)fallbacks.push(()=>callGemini(system,userContent,wantJson,{...opts,model:_geminiFallbackModel(m)},signal));
+  }
+  if(PROXY_URL)fallbacks.push(()=>callProxy(system,userContent,wantJson,opts,signal));
+  for(const fb of fallbacks){
+    if(signal&&signal.aborted)throw new DOMException("aborted","AbortError");
+    try{
+      _notifyFallback("backup");
+      const r=await fb();
+      if(opts.onDelta&&typeof r==="string"){try{opts.onDelta(r);}catch{}}  // 폴백은 스트리밍 없음 → 한 번에 전달
+      return r;
+    }catch(e2){ if(e2&&e2.name==="AbortError")throw e2; /* 다음 폴백 시도 */ }
+  }
+  throw lastErr;   // 모든 폴백 실패 → 원래 에러 표시
 }
 function fixJson(str){
   let out="",inStr=false,i=0;
@@ -742,7 +816,7 @@ function parseQuestion(txt){
   };
 }
 async function callClaude(system,userContent,wantJson,opts={},signal){
-  if(!CFG.key)throw new Error("NO_KEY");
+  if(!CFG.key){const e=new Error("NO_KEY");e.noFallback=true;throw e;}
   const maxTok=opts.maxTok||(wantJson?2048:1024);
   const hdrs={"content-type":"application/json","x-api-key":CFG.key,
     "anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"};
@@ -756,7 +830,7 @@ async function callClaude(system,userContent,wantJson,opts={},signal){
     body:JSON.stringify({model:opts.model||CFG.model,max_tokens:maxTok,system:sysPay,
       messages:opts.messages||[{role:"user",content:userContent}],...(wantStream?{stream:true}:{})}),
   });
-  if(!res.ok){let m="API "+res.status;try{const j=await res.json();if(j.error?.message)m=j.error.message}catch{}throw new Error(m)}
+  if(!res.ok){let m="API "+res.status;try{const j=await res.json();if(j.error?.message)m=j.error.message}catch{}const er=new Error(m);er.status=res.status;throw er;}
   if(wantStream&&res.body&&res.body.getReader){
     const reader=res.body.getReader(),dec=new TextDecoder();let buf="",full="";
     while(true){

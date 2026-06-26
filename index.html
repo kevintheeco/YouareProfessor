@@ -609,7 +609,7 @@ async function callGemini(system,userContent,wantJson,opts={},signal){
 }
 // 클로드 API 장애 시 폴백할 백업 프록시(Cloudflare Worker). 키는 프록시 서버에만 있음.
 // 최초 배포(proxy/) 후 워커 URL을 여기에 채운다. 비어있으면 공용 폴백 비활성(개인키 폴백만 동작).
-const PROXY_URL="";
+const PROXY_URL="https://yp-ai-proxy.soomin020114.workers.dev";
 const _sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function _aiRetriable(e){
   if(!e||e.noFallback||e.name==="AbortError")return false;

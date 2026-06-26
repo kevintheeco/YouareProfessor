@@ -12,3 +12,8 @@ OPENAI_MODEL_FAST = "gpt-4o-mini"
 # 키는 여기 두지 말 것! 아래 명령으로 시크릿 등록:
 #   wrangler secret put GEMINI_KEY
 #   wrangler secret put OPENAI_KEY
+#
+# 학원(회사키) 경로용 — 학원코드↔클로드 워크스페이스 키 매핑(JSON):
+#   wrangler secret put ACADEMY_KEYS
+#   값 예시(한 줄): {"mj7x2a":"sk-ant-...","ga9k3b":"sk-ant-..."}
+#   (대시보드에서 넣을 땐 Secret 타입으로 위 JSON 통째로 붙여넣기)

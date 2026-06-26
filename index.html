@@ -610,6 +610,9 @@ async function callGemini(system,userContent,wantJson,opts={},signal){
 // 클로드 API 장애 시 폴백할 백업 프록시(Cloudflare Worker). 키는 프록시 서버에만 있음.
 // 최초 배포(proxy/) 후 워커 URL을 여기에 채운다. 비어있으면 공용 폴백 비활성(개인키 폴백만 동작).
 const PROXY_URL="https://yp-ai-proxy.soomin020114.workers.dev";
+// 학원(회사키) 모드: 전용 링크 …/#academy=<코드> 면 활성. 프록시가 그 학원 키로 클로드 호출.
+let COMPANY_MODE=false, ACADEMY_CODE="";
+try{const _am=(location.hash||"").match(/academy=([A-Za-z0-9_-]+)/i);if(_am){ACADEMY_CODE=_am[1];COMPANY_MODE=true;}}catch{}
 const _sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function _aiRetriable(e){
   if(!e||e.noFallback||e.name==="AbortError")return false;
@@ -649,6 +652,47 @@ async function callProxy(system,userContent,wantJson,opts={},signal){
   if(s===-1)throw new Error("JSON 응답 없음 — 다시 시도해봐");
   return parseJsonLoose(clean.slice(s,e>s?e+1:clean.length));
 }
+// 클로드 SSE 스트림을 읽어 글자씩 onDelta로 흘리고 최종 텍스트 반환 (callClaude·callProxyClaude 공용)
+async function _readClaudeSSE(res,onDelta){
+  const reader=res.body.getReader(),dec=new TextDecoder();let buf="",full="";
+  while(true){
+    const {done,value}=await reader.read();
+    if(done)break;
+    buf+=dec.decode(value,{stream:true});
+    let nl;
+    while((nl=buf.indexOf("\n"))>=0){
+      const line=buf.slice(0,nl).trim();buf=buf.slice(nl+1);
+      if(!line.startsWith("data:"))continue;
+      const pl=line.slice(5).trim();if(pl==="[DONE]")continue;
+      let ev;try{ev=JSON.parse(pl);}catch{continue;}
+      if(ev.type==="content_block_delta"&&ev.delta&&ev.delta.type==="text_delta"){full+=ev.delta.text;try{onDelta&&onDelta(full);}catch{}}
+      else if(ev.type==="error")throw new Error(ev.error?.message||"stream error");
+    }
+  }
+  return full.trim();
+}
+// 회사키(학원) 메인 경로 — 프록시 /claude로 클로드 호출(스트리밍 유지). 클로드 죽으면 프록시 내부서 제미나이/o3 폴백.
+async function callProxyClaude(system,userContent,wantJson,opts={},signal){
+  if(!PROXY_URL)throw new Error("프록시 미설정");
+  const messages=opts.messages||[{role:"user",content:userContent}];
+  const stream=!!opts.onDelta&&!wantJson;
+  const res=await fetch(PROXY_URL+"/claude",{
+    method:"POST",headers:{"content-type":"application/json"},signal,
+    body:JSON.stringify({academyCode:ACADEMY_CODE,system,messages,wantJson,maxTok:opts.maxTok,model:opts.model||CFG.model,stream}),
+  });
+  if(!res.ok){let m="Proxy "+res.status;try{const j=await res.json();m=j.error||(j.detail&&j.detail.join("; "))||m;}catch{}const er=new Error(m);er.status=res.status;throw er;}
+  const ct=res.headers.get("content-type")||"";
+  if(stream&&ct.includes("text/event-stream")&&res.body&&res.body.getReader) return await _readClaudeSSE(res,opts.onDelta);
+  // JSON 응답(비스트림 또는 프록시 내부 폴백 결과)
+  const data=await res.json();
+  const text=(data.text||"").trim();
+  if(opts.onDelta&&!wantJson&&text){try{opts.onDelta(text);}catch{}}
+  if(!wantJson)return text;
+  let clean=text.replace(/```json\s*/gi,"").replace(/```/g,"").trim();
+  const s=clean.indexOf("{"),e=clean.lastIndexOf("}");
+  if(s===-1)throw new Error("JSON 응답 없음 — 다시 시도해봐");
+  return parseJsonLoose(clean.slice(s,e>s?e+1:clean.length));
+}
 async function callAI(system,userContent,wantJson,opts={},signal){
   if(opts.lang==="en")system=
     "WRITE YOUR ENTIRE RESPONSE IN ENGLISH. Even though the instructions below and the study material may be in Korean, every sentence you output — questions, feedback, explanations, hints, model answers, table cells, graph labels — MUST be in natural English. Translate ideas from Korean source material into English; never reply in Korean prose. The ONLY exception: if a strict output format below lists fixed Korean tokens for the fields QTYPE / GAP_TYPE / DEPTH / VERDICT, keep those exact tokens (recall/understand/apply; 개념누락/이해얕음/핵심비껴감/표현부족/갭없음; 암기 수준/이해 수준/설명가능 수준/응용가능 수준; correct/partial/incorrect). Everything else = English.\n\n"
@@ -656,9 +700,11 @@ async function callAI(system,userContent,wantJson,opts={},signal){
     +"\n\n[REMINDER: Respond in ENGLISH only. Do not drift back to Korean even if the source is Korean.]";
   const m=opts.model||CFG.model;
   const primaryGemini=m.startsWith("gemini");
-  const runPrimary=()=>primaryGemini
-    ?callGemini(system,userContent,wantJson,opts,signal)
-    :callClaude(system,userContent,wantJson,opts,signal);
+  const runPrimary=()=>COMPANY_MODE
+    ?callProxyClaude(system,userContent,wantJson,opts,signal)   // 학원(회사키): 프록시가 클로드+내부 백업 처리
+    :primaryGemini
+      ?callGemini(system,userContent,wantJson,opts,signal)
+      :callClaude(system,userContent,wantJson,opts,signal);
   // 1) 1차 시도 + 같은 API 자동 재시도 (클로드 과부하 529 등은 보통 몇 초 뒤 풀림)
   const delays=[0,800,2200];
   let lastErr;
@@ -670,6 +716,7 @@ async function callAI(system,userContent,wantJson,opts={},signal){
   }
   // 2) 그래도 실패 → 다른 경로로 자동 폴백 (순서대로 시도, 먼저 성공하는 걸 사용)
   if(!_aiRetriable(lastErr))throw lastErr;
+  if(COMPANY_MODE)throw lastErr;   // 학원: 프록시가 이미 클로드→제미나이→o3 다 시도함(프록시 자체 불통이면 끝)
   const fallbacks=[];
   if(primaryGemini){
     // Gemini 장애 → 클로드(개인키 있으면) → 공용 프록시
@@ -831,24 +878,7 @@ async function callClaude(system,userContent,wantJson,opts={},signal){
       messages:opts.messages||[{role:"user",content:userContent}],...(wantStream?{stream:true}:{})}),
   });
   if(!res.ok){let m="API "+res.status;try{const j=await res.json();if(j.error?.message)m=j.error.message}catch{}const er=new Error(m);er.status=res.status;throw er;}
-  if(wantStream&&res.body&&res.body.getReader){
-    const reader=res.body.getReader(),dec=new TextDecoder();let buf="",full="";
-    while(true){
-      const {done,value}=await reader.read();
-      if(done)break;
-      buf+=dec.decode(value,{stream:true});
-      let nl;
-      while((nl=buf.indexOf("\n"))>=0){
-        const line=buf.slice(0,nl).trim();buf=buf.slice(nl+1);
-        if(!line.startsWith("data:"))continue;
-        const pl=line.slice(5).trim();if(pl==="[DONE]")continue;
-        let ev;try{ev=JSON.parse(pl);}catch{continue;}
-        if(ev.type==="content_block_delta"&&ev.delta&&ev.delta.type==="text_delta"){full+=ev.delta.text;try{opts.onDelta(full);}catch{}}
-        else if(ev.type==="error")throw new Error(ev.error?.message||"stream error");
-      }
-    }
-    return full.trim();
-  }
+  if(wantStream&&res.body&&res.body.getReader) return await _readClaudeSSE(res,opts.onDelta);
   const data=await res.json();
   const text=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n").trim();
   if(!wantJson)return text;
@@ -2634,7 +2664,7 @@ function AddMaterial({subjects,onSave,onDone,onCancel}){
   }
 
   async function save(){
-    if(!CFG.key&&!CFG.geminiKey){
+    if(!CFG.key&&!CFG.geminiKey&&!COMPANY_MODE){
       setErr(tr("API 키가 없어. 설정에서 Claude 또는 Gemini 키를 먼저 입력해줘.","No API key. Add a Claude or Gemini key in Settings first."));return;
     }
     if(!material.trim()&&files.length===0){

@@ -23,30 +23,60 @@ export default {
     try { body = await request.json(); }
     catch { return json({ error: "bad json" }, 400, cors); }
 
-    const { system = "", messages = [], wantJson = false, maxTok, tier = "smart" } = body;
-    const tokens = clampInt(maxTok, 16, 8192, wantJson ? 2048 : 1024);
-
-    const errors = [];
-
-    // 1) Gemini
-    if (env.GEMINI_KEY) {
-      try {
-        const r = await callGemini(env, system, messages, tokens, tier);
-        return json({ text: r.text, provider: "gemini", model: r.model }, 200, cors);
-      } catch (e) { errors.push("gemini: " + (e && e.message || e)); }
-    } else errors.push("gemini: no key");
-
-    // 2) OpenAI (GPT) — smart는 추론 모델, 실패 시 gpt-4o로 자동 복구
-    if (env.OPENAI_KEY) {
-      try {
-        const r = await callOpenAI(env, system, messages, tokens, tier);
-        return json({ text: r.text, provider: "openai", model: r.model }, 200, cors);
-      } catch (e) { errors.push("openai: " + (e && e.message || e)); }
-    } else errors.push("openai: no key");
-
-    return json({ error: "all backups failed", detail: errors }, 502, cors);
+    const path = new URL(request.url).pathname.replace(/\/$/, "");
+    if (path === "/claude") return handleClaude(body, env, cors);   // 회사키(학원) 메인 경로
+    return handleBackup(body, env, cors);                            // 백업 전용 경로(개인 BYO 폴백)
   },
 };
+
+// 회사키(학원) 경로: 클로드(학원 워크스페이스 키) → 실패 시 Gemini → OpenAI. 스트리밍 passthrough.
+async function handleClaude(body, env, cors) {
+  const { academyCode = "", system = "", messages = [], wantJson = false, maxTok, model, stream = false } = body;
+  const keys = parseJson(env.ACADEMY_KEYS) || {};
+  const key = academyCode && keys[academyCode];
+  if (!key) return json({ error: "unknown academy code" }, 403, cors);
+  const tokens = clampInt(maxTok, 16, 8192, wantJson ? 2048 : 1024);
+  const useModel = model || "claude-sonnet-4-6";
+  try {
+    const upstream = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: useModel, max_tokens: tokens, system, messages, ...(stream ? { stream: true } : {}) }),
+    });
+    if (!upstream.ok) throw new Error("HTTP " + upstream.status + " " + (await safeText(upstream)));
+    if (stream && upstream.body) {
+      // 클로드 SSE를 그대로 클라이언트로 흘려보냄(스트리밍 유지)
+      return new Response(upstream.body, { status: 200, headers: { ...cors, "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" } });
+    }
+    const data = await upstream.json();
+    const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
+    if (!text) throw new Error("empty");
+    return json({ text, provider: "claude", model: useModel }, 200, cors);
+  } catch (e1) {
+    // 클로드 실패 → 백업(비스트림). tier는 모델로 추정.
+    const tier = /haiku/i.test(useModel) ? "fast" : "smart";
+    const errors = ["claude: " + (e1 && e1.message || e1)];
+    if (env.GEMINI_KEY) { try { const r = await callGemini(env, system, messages, tokens, tier); return json({ text: r.text, provider: "gemini", model: r.model }, 200, cors); } catch (e) { errors.push("gemini: " + (e && e.message || e)); } }
+    if (env.OPENAI_KEY) { try { const r = await callOpenAI(env, system, messages, tokens, tier); return json({ text: r.text, provider: "openai", model: r.model }, 200, cors); } catch (e) { errors.push("openai: " + (e && e.message || e)); } }
+    return json({ error: "all providers failed", detail: errors }, 502, cors);
+  }
+}
+
+// 백업 전용 경로(개인 BYO에서 클로드 죽었을 때): Gemini → OpenAI
+async function handleBackup(body, env, cors) {
+  const { system = "", messages = [], wantJson = false, maxTok, tier = "smart" } = body;
+  const tokens = clampInt(maxTok, 16, 8192, wantJson ? 2048 : 1024);
+  const errors = [];
+  if (env.GEMINI_KEY) {
+    try { const r = await callGemini(env, system, messages, tokens, tier); return json({ text: r.text, provider: "gemini", model: r.model }, 200, cors); }
+    catch (e) { errors.push("gemini: " + (e && e.message || e)); }
+  } else errors.push("gemini: no key");
+  if (env.OPENAI_KEY) {
+    try { const r = await callOpenAI(env, system, messages, tokens, tier); return json({ text: r.text, provider: "openai", model: r.model }, 200, cors); }
+    catch (e) { errors.push("openai: " + (e && e.message || e)); }
+  } else errors.push("openai: no key");
+  return json({ error: "all backups failed", detail: errors }, 502, cors);
+}
 
 /* ---------- Gemini ---------- */
 async function callGemini(env, system, messages, maxTok, tier) {
@@ -151,3 +181,4 @@ function clampInt(v, min, max, def) {
   return Math.max(min, Math.min(max, n));
 }
 async function safeText(res) { try { return (await res.text()).slice(0, 300); } catch { return ""; } }
+function parseJson(s) { try { return JSON.parse(s); } catch { return null; } }

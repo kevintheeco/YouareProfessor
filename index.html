@@ -551,15 +551,14 @@ async function cloudSyncOnLogin(uid){
   }catch(e){console.warn("[cloud] 로그인 동기화 실패 (Firestore 설정 확인)",e);ok=false;}
   _syncing=false;_emitSync({busy:false,ok,at:ok?Date.now():0});return{pulled,pushed,ok};
 }
+// 사용자가 직접 고르는 모델은 클로드만(니가교수=클로드). GPT/Gemini는 클로드 장애 시 서버가 자동으로 쓰는 백업.
 const MODELS=[
   {id:"claude-sonnet-4-6",label:"Sonnet 4.6 · 추천"},
-  {id:"gemini-2.5-flash",label:"Gemini 2.5 Flash"},
   {id:"claude-haiku-4-5-20251001",label:"Haiku 4.5 · 가장 저렴"},
   {id:"claude-opus-4-8",label:"Opus 4.8 · 가장 똑똑"},
 ];
 const QMODELS=[
   {id:"claude-haiku-4-5-20251001",label:"Haiku 4.5 · 빠름 (권장)"},
-  {id:"gemini-2.5-flash-lite",label:"Gemini 2.5 Flash-Lite · 저렴"},
   {id:"claude-sonnet-4-6",label:"Sonnet 4.6 · 정확"},
   {id:"claude-opus-4-8",label:"Opus 4.8 · 최고 품질"},
 ];
@@ -1584,7 +1583,7 @@ function Fb({label,color,bg,text}){
    APP ROOT
 ════════════════════════════════════════════ */
 function App(){
-  const [view,setView]=useState(CFG.key?"home":"onboard");
+  const [view,setView]=useState((CFG.key||COMPANY_MODE)?"home":"onboard");
   const [decks,setDecks]=useState([]);
   const [subjects,setSubjects]=useState(defaultSubjects());
   const [filterSubj,setFilterSubj]=useState("all");
@@ -1678,7 +1677,7 @@ function App(){
         </div>
       )}
       <div className="hd">
-        <div className="brand" onClick={()=>setView(CFG.key?"home":"onboard")}>
+        <div className="brand" onClick={()=>setView((CFG.key||COMPANY_MODE)?"home":"onboard")}>
           <Prof size={44}/><div><h1>{tr("니가 교수","You're the Prof")}</h1><div className="tag">{tr("니가 설명해봐, 내가 채점할게","You explain, I'll grade")}</div></div>
         </div>
         <div className="hd-r">
@@ -1727,7 +1726,7 @@ function App(){
       )}
 
       {view==="onboard"&&<Onboard onDone={()=>setView("home")}/>}
-      {view==="settings"&&<Settings onDone={()=>setView(CFG.key?"home":"onboard")}/>}
+      {view==="settings"&&<Settings onDone={()=>setView((CFG.key||COMPANY_MODE)?"home":"onboard")}/>}
       {view==="home"&&(
         <>
           <SubjectTabs subjects={subjects} active={filterSubj} onChange={setFilterSubj} onSave={saveSubjects}/>
@@ -1874,6 +1873,9 @@ function KeyForm({onSaved,cta,showCancel,onCancel}){
   const [testing,setTesting]=useState(false);
   const [err,setErr]=useState("");
   async function save(){
+    if(COMPANY_MODE){   // 회사가 키·모델 제공 → 사용자는 언어만 저장하면 됨(키 입력 불필요)
+      CFG.lang=lang;LS.set("ng:lang",CFG.lang);onSaved();return;
+    }
     const hasA=key.trim().length>0,hasG=geminiKey.trim().length>0;
     if(!hasA&&!hasG){setErr(tr("최소 하나의 API 키를 입력해줘.","Enter at least one API key."));return;}
     setTesting(true);setErr("");
@@ -1887,6 +1889,9 @@ function KeyForm({onSaved,cta,showCancel,onCancel}){
   }
   return(
     <>
+      {COMPANY_MODE
+        ? <div className="warn">🎓 {tr("AI는 회사가 제공해요. 따로 키를 넣지 않아도 바로 쓸 수 있어요.","Your AI is provided by your organization — no API key needed.")}</div>
+        : <>
       <div className="selectrow"><label>{tr("Anthropic API 키","Anthropic API key")}</label>
         <input className="field" type="password" placeholder="sk-ant-..." value={key}
           onChange={e=>setKey(e.target.value)} autoComplete="off"/></div>
@@ -1903,13 +1908,14 @@ function KeyForm({onSaved,cta,showCancel,onCancel}){
         <select className="field" value={qmodel} onChange={e=>setQmodel(e.target.value)}>
           {QMODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
         </select></div>
+        </>}
       <div className="selectrow"><label>{tr("🌐 공부 언어","🌐 Study language")} <span className="muted" style={{fontWeight:400}}>{tr("(문제·피드백·설명 언어 + 앱 화면)","(questions, feedback & the whole app)")}</span></label>
         <select className="field" value={lang} onChange={e=>setLang(e.target.value)}>
           <option value="ko">🇰🇷 한국어</option>
           <option value="en">🇬🇧 English</option>
         </select></div>
-      <div className="warn">{tr("키는 ","Keys are stored ")}<b>{tr("이 기기 브라우저에만","only in this browser")}</b>{tr(" 저장돼.",".")}
-        Anthropic: <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a></div>
+      {!COMPANY_MODE&&<div className="warn">{tr("키는 ","Keys are stored ")}<b>{tr("이 기기 브라우저에만","only in this browser")}</b>{tr(" 저장돼.",".")}
+        Anthropic: <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a></div>}
       {err&&<div className="err">{err}</div>}
       <div className="row">
         <button className="btn pri" onClick={save} disabled={testing}>{testing?tr("연결 확인 중…","Checking…"):cta}</button>
